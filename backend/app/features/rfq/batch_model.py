@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from sqlalchemy import Date
 from sqlalchemy import DateTime
+from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped
@@ -44,6 +45,20 @@ class RFQBatch(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
+        index=True,
+    )
+
+    # ---------------------------------------------------------------- tenancy
+    #: El comprador dueño del batch. Nullable SOLO por la migración (lote L2): toda
+    #: fila nueva lo lleva (``batch_service`` lo exige) y pasa a NOT NULL cuando
+    #: haya que limpiar filas viejas. CASCADE como ``rfqs.user_id`` en la base.
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+            name="fk_rfq_batches_user_id_users",
+        ),
+        nullable=True,
         index=True,
     )
 
@@ -100,6 +115,10 @@ class RFQBatch(TimestampMixin, Base):
         "RFQ",
         back_populates="batch",
     )
+
+    #: Sin ``back_populates``: no se agrega un ``batches`` al modelo ``User`` de la
+    #: base (regla del lab: nada de lógica nueva en archivos existentes).
+    owner = relationship("User")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<RFQBatch id={self.id} name={self.name!r} status={self.status!r}>"

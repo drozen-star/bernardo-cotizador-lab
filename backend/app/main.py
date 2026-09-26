@@ -45,6 +45,7 @@ from app.features.followup.scheduler import runner as scheduler_runner
 from app.features.invitation.router import router as invitation_router
 from app.features.public_form.router import router as public_form_router
 from app.features.quote.router import router as quote_router
+from app.features.rfq.batch_router import router as rfq_batch_router  # lab L2
 from app.features.rfq.router import meta_router
 from app.features.rfq.router import router as rfq_router
 from app.features.supplier.router import router as supplier_router
@@ -135,6 +136,10 @@ app = FastAPI(
     openapi_tags=[
         {"name": "Auth", "description": "Buyer accounts and sessions."},
         {"name": "RFQs", "description": "Requests for quotation."},
+        {
+            "name": "RFQ batches (lab)",
+            "description": "Lab Bernardo: un Excel de materiales -> N RFQs y un mail por proveedor.",
+        },
         {"name": "Suppliers", "description": "The buyer's supplier directory."},
         {"name": "Invitations", "description": "Tokenized form links per supplier."},
         {"name": "Quotes", "description": "Quotes from every source."},
@@ -167,6 +172,7 @@ register_exception_handlers(app)
 # ---- buyer API -------------------------------------------------------------
 app.include_router(auth_router)
 app.include_router(rfq_router)
+app.include_router(rfq_batch_router)  # lab L2
 app.include_router(supplier_router)
 app.include_router(invitation_router)
 app.include_router(quote_router)

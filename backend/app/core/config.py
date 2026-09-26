@@ -205,6 +205,12 @@ class Settings(BaseSettings):
     #: Turn it off on a deployment that should not carry a demo at all.
     DEMO_MODE_ENABLED: bool = True
 
+    # ------------------------------------------------------------- lab Bernardo
+    #: Número de WhatsApp de Bernardo en E.164 sin "+", p. ej. 5491122334455. Va en el
+    #: link wa.me del mail de batch (features/rfq/batch_invite.py). Vacío = el mail
+    #: sale sin ese link y se loguea un warning; nada más cambia.
+    BERNARDO_WA_NUMBER: str = ""
+
     # ----------------------------------------------------------------- comparison
     #: Default currency. SGD because this product is aimed at Singapore facilities
     #: and building-services procurement; a deployment elsewhere sets its own.

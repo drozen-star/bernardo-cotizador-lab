@@ -182,3 +182,109 @@ Mismo resultado que L0. Ningún test de la base se rompió por las columnas nuev
 `app/models.py`, `features/rfq/model.py`, `features/supplier/model.py`,
 `features/quote/model.py` (columnas y registro). Nuevos: `features/rfq/batch_model.py`,
 la migración, y esta sección.
+
+## Lote L2 — intake y batch (2026-09-26)
+
+Un Excel de formato fijo se convierte en un `rfq_batch` con un RFQ por fila, y cada
+proveedor elegido recibe **un** mail por batch con la lista completa, sus links al
+formulario de la base y un link `wa.me` para seguir por WhatsApp.
+
+### Flujo
+
+```
+POST /rfq-batches/import (multipart)
+  file .xlsx ─► intake.parse_materials_xlsx ─► rows (todos los errores de una vez, con fila)
+  supplier_ids ─► batch_invite.resolve_suppliers (ajeno = 404, ANTES de crear nada)
+  ─► batch_service.create_batch_from_rows ─► RFQBatch + N RFQ (rfq_batch_id, goods, ARS)
+  ─► batch_invite.invite_suppliers_to_batch
+        ─► InvitationService.bulk_create por RFQ (una Invitation por rfq × proveedor)
+        ─► un EmailMessage por proveedor ─► send_email_message_sync (base)
+        ─► un FollowUp kind=manual por invitación (mismo cuerpo), sent_at, last_contacted_at
+GET  /rfq-batches/{id}   batch + items + invitations (emails viven en FollowUp)
+```
+
+### Archivos nuevos (`backend/app/features/rfq/`, todos < 400 líneas)
+
+| Archivo | Líneas | Qué hace |
+| --- | --- | --- |
+| `intake.py` | 243 | `parse_materials_xlsx(file)`: hoja 1, encabezados exactos `item, quantity, unit, specification, accepted_alternatives`; valida y devuelve dicts |
+| `batch_service.py` | 146 | `create_batch_from_rows(...)`, `get_batch`, `list_batch_invitations` |
+| `batch_invite.py` | 341 | `invite_suppliers_to_batch`, `resolve_suppliers`, `build_batch_email`, `whatsapp_link` |
+| `batch_schema.py` | 136 | `RFQBatchResponse` y `build_batch_response` |
+| `batch_router.py` | 120 | `POST /rfq-batches/import`, `GET /rfq-batches/{id}` |
+| `backend/examples/make_examples.py` | 94 | genera los dos Excel de ejemplo |
+| `backend/tests/test_rfq_batch.py` | ~500 | 25 tests |
+
+Archivos de la base tocados, solo registro: `main.py` (import, `include_router`, tag),
+`core/config.py` (`BERNARDO_WA_NUMBER`), `.env.example` (bloque "Lab Bernardo — WhatsApp"),
+`rfq/batch_model.py` (columna `user_id` + relación `owner`), `pyproject.toml` / `uv.lock` /
+`requirements.txt` (openpyxl 3.1.5; el CI compara requirements.txt con el lock).
+
+### Migración `20260926_1614_25a559685695_lab_l2_rfq_batches_user_id.py`
+
+`rfq_batches.user_id` integer **nullable**, FK `users.id ON DELETE CASCADE`
+(`fk_rfq_batches_user_id_users`), índice. Aplicada en Supabase: `alembic_version =
+25a559685695`.
+
+**Pendiente declarado:** pasa a `NOT NULL` en una migración posterior. `batch_service` ya
+exige `user_id` en toda fila nueva; cuando haya que limpiar: `UPDATE rfq_batches SET user_id
+= <buyer> WHERE user_id IS NULL` (o borrar esas filas) y después `ALTER COLUMN user_id SET
+NOT NULL`. Hoy no hay filas huérfanas (la tabla nació vacía en L1).
+
+### Decisiones fuera del spec
+
+- **`quantity` debe ser entera**, además de numérica y > 0: `rfqs.quantity` es `Integer` en
+  la base. El error dice la fila y sugiere cambiar la unidad; no se redondea en silencio.
+- **`procurement_type="goods"`** para los RFQs del batch. El default de la base es
+  `service` y le pediría al corralón SLA de atención y matrículas.
+- **Encabezados estrictos**: falta uno → error; columna extra → error. Formato fijo es fijo.
+- **Todos los errores del Excel en una pasada**, no el primero.
+- `specification` vacía cae al nombre del ítem (columna NOT NULL); `accepted_alternatives`
+  va a `rfqs.notes` con prefijo "Alternativas aceptadas:".
+- El multipart lleva `supplier_ids` **repetido** (`supplier_ids=3&supplier_ids=4`), no
+  `supplier_ids[]`: es lo que mandan Swagger UI y httpx y lo que lee FastAPI.
+- `BERNARDO_WA_NUMBER` se normaliza a dígitos (se tolera un "+" o espacios). Vacío → el
+  mail sale sin link y se loguea un warning. Texto del link:
+  `Hola Bernardo, soy {supplier.name}. Mandame el pedido {batch.name}.`
+- El mail lo firma "Bernardo, asistente de compras de {company_name}" del comprador. Plazo
+  en hora de Buenos Aires. Sin exclamaciones ni emojis (hay test).
+
+### Tests (SQLite)
+
+```
+uv run pytest tests/test_rfq_batch.py -q   -> 25 passed
+uv run pytest -q                           -> 477 passed, 1 warning in 55.36s
+uv run ruff check . ../agents ../comparison -> All checks passed
+```
+
+Cubren: parseo OK, cada validación, batch con 5 RFQs (rfq_number con el generador de la
+base, deadline 72 h), 10 invitaciones y 2 mails con 5 links cada uno, `wa.me` exacto,
+warning sin número, proveedor ajeno → 404 sin crear nada, endpoint end-to-end, 400 con
+filas para el Excel roto, 400 no-xlsx, 401 sin auth.
+
+### Prueba manual contra Supabase (2026-09-26)
+
+API local con `uvicorn` apuntando a Supabase, comprador demo del seed
+(`buyer@demo-autopilot.example.com`), proveedores 3 y 4 del seed, Excel
+`examples/materiales_mamposteria.xlsx`. Hecha vía la API HTTP (mismo endpoint que expone
+`/docs`).
+
+| Qué | Resultado |
+| --- | --- |
+| Import | 201 |
+| Batch | id 1 |
+| RFQs | ids 2, 3, 4, 5, 6 |
+| Invitaciones | ids 5 a 14 (5 por proveedor) |
+| Mails | 2, status `sent`, con `whatsapp_link` |
+| GET /rfq-batches/1 | 200, 5 rfq_ids, 10 invitaciones |
+
+El mail completo tal como salió en consola está en `prompts/2026-09-26-l2-intake.txt`.
+
+### Para L3
+
+- `NOT NULL` en `rfq_batches.user_id` cuando corresponda.
+- El formulario público de la base es por RFQ: el proveedor abre 5 links. Un formulario por
+  batch es el siguiente salto de UX.
+- `iva_included` / `freight_included` (L1) aún no se piden en el formulario público ni se
+  parsean: el mail ya los pide en texto, el schema del form no.
+- La demo y el batch 1 quedaron en Supabase; `dev.cmd reset` borraría el SQLite local, no eso.
