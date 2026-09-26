@@ -65,3 +65,7 @@ Thumbs.db
 # dev.cmd IS committed: it is the documented way to run the stack locally, and it
 # opens with "dev.cmd" from a Command Prompt. Ignore only personal overrides.
 dev.local.cmd
+
+# --- lab Bernardo ---------------------------------------------------------------
+# Reportes de cada lote del laboratorio; locales, nunca se commitean.
+prompts/
