@@ -15,6 +15,8 @@ from app.features.quote.model import SupplierQuote  # noqa: F401
 from app.features.rfq.batch_model import RFQBatch  # noqa: F401  (lab L1)
 from app.features.rfq.model import RFQ  # noqa: F401
 from app.features.supplier.model import Supplier  # noqa: F401
+from app.features.whatsapp.model import WhatsappConversation  # noqa: F401  (lab L3a)
+from app.features.whatsapp.model import WhatsappMessage  # noqa: F401  (lab L3a)
 
 __all__ = [
     "Approval",
@@ -26,4 +28,6 @@ __all__ = [
     "Supplier",
     "SupplierQuote",
     "User",
+    "WhatsappConversation",
+    "WhatsappMessage",
 ]

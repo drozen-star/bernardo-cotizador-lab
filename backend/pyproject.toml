@@ -32,6 +32,7 @@ dependencies = [
     "langgraph>=1.2.5",
     "openai>=1.93.0",
     "openpyxl>=3.1.5",
+    "anthropic>=1.8",
 ]
 
 [dependency-groups]

@@ -26,6 +26,7 @@ from sqlalchemy import Integer
 from sqlalchemy import JSON
 from sqlalchemy import Numeric
 from sqlalchemy import String
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
@@ -33,7 +34,7 @@ from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.core.mixins import TimestampMixin
 
-QUOTE_SOURCES = ("form", "manual", "import")
+QUOTE_SOURCES = ("form", "manual", "import", "whatsapp")
 
 #: complete | incomplete | flagged
 COMPLETENESS_STATES = ("complete", "incomplete", "flagged")
@@ -41,6 +42,13 @@ COMPLETENESS_STATES = ("complete", "incomplete", "flagged")
 
 class SupplierQuote(TimestampMixin, Base):
     __tablename__ = "supplier_quotes"
+
+    # Lab L3a: una cotización por (conversación de WhatsApp, ítem). Con
+    # conversation_id NULL (form, manual, import) la unicidad no aplica: los NULL son
+    # distintos entre sí tanto en SQLite como en PostgreSQL.
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "rfq_id", name="uq_supplier_quote_conversation_rfq"),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -66,6 +74,18 @@ class SupplierQuote(TimestampMixin, Base):
 
     supplier_id: Mapped[int | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    #: Lab L3a: de qué conversación de WhatsApp salió la cotización. NULL para las
+    #: demás fuentes.
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "whatsapp_conversations.id",
+            ondelete="SET NULL",
+            name="fk_supplier_quotes_conversation_id_whatsapp_conversations",
+        ),
         nullable=True,
         index=True,
     )
