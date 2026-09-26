@@ -88,3 +88,97 @@ backend/tests/               16 archivos; conftest.py levanta SQLite temporal, s
 
 Comandos útiles: `uv run pytest -q` · `uv run ruff check . ../agents ../comparison` ·
 `uv run python -m scripts.list_routes` · `dev.cmd [start|seed|reset|links|stop]`.
+
+## Lote L1 — schema (2026-09-26)
+
+### Base de datos
+
+`backend/.env` apunta al **Session pooler de Supabase**, proyecto `ugxdryhyucwdzgaqkwtd`
+(bernardo-cotizador-lab, `sa-east-1`, Postgres 17.6). Host correcto:
+`aws-0-sa-east-1.pooler.supabase.com:5432`, usuario `postgres.<ref>`. Con `aws-1` el pooler
+responde `FATAL: (ENOTFOUND) tenant/user ... not found`: no es error de contraseña, es que
+ese cluster no tiene el tenant. `DATABASE_URL_DIRECT` es la misma URL (Alembic la usa).
+
+Estado tras `uv run alembic upgrade head`: `alembic_version = 80133b065ad3`.
+
+### Regla: los tests NUNCA se corren contra Supabase
+
+`tests/conftest.py` fija `DATABASE_URL` a un SQLite temporal y, en cada test, hace
+`Base.metadata.drop_all()` + `create_all()`. Contra Supabase eso destruiría el schema
+migrado (y de paso fallaría en el primer `DROP TABLE supplier_quotes` porque la vista
+`v_price_history` depende de ella). **La suite se corre solo con SQLite, como hace la
+base.** No se crean schemas auxiliares ni plugins para desviar el conftest.
+
+### Tabla nueva: `rfq_batches` (`backend/app/features/rfq/batch_model.py`, 105 líneas)
+
+La base modela un RFQ = un ítem; el lab agrupa N ítems en un batch.
+
+| Columna | Tipo | Notas |
+| --- | --- | --- |
+| id | integer PK | índice |
+| name | varchar(255) NOT NULL | |
+| site_name / site_address | varchar(255) / varchar(1000) | nullable |
+| delivery_expectation | date | nullable |
+| deadline | timestamptz NOT NULL | default Python `now + 72 h`, índice |
+| status | varchar(16) NOT NULL | `open` (default) · `closed` · `expired`, índice |
+| notes | varchar(2000) | nullable |
+| created_at / updated_at | timestamptz | `TimestampMixin` |
+
+Relación `RFQBatch.rfqs` ↔ `RFQ.batch`, sin cascade. Registrado en `app/models.py`.
+Sin `user_id` (no estaba en el spec): si el dashboard filtra por comprador, agregarlo en
+un lote siguiente.
+
+### Columnas nuevas (todas nullable)
+
+| Tabla.columna | Tipo | Notas |
+| --- | --- | --- |
+| rfqs.rfq_batch_id | integer FK → rfq_batches.id | `ON DELETE SET NULL`, índice, constraint `fk_rfqs_rfq_batch_id_rfq_batches` |
+| suppliers.whatsapp_phone | varchar(64) | |
+| suppliers.rubros | json | lista, p. ej. `["hierro","cemento"]` |
+| suppliers.last_contacted_at | timestamptz | |
+| suppliers.quoted_count | integer | default 0 |
+| suppliers.awarded_count | integer | default 0 |
+| supplier_quotes.iva_included | boolean | NULL = el proveedor no lo aclaró |
+| supplier_quotes.freight_included | boolean | idem |
+
+### Vista `v_price_history`
+
+`supplier_quotes sq JOIN rfqs r LEFT JOIN suppliers s`. Columnas: supplier_id,
+supplier_name (`COALESCE(s.name, sq.supplier_name)`), rfq_id, item_name, unit_price,
+currency, iva_included, freight_included, payment_terms, lead_time, validity_date, source,
+submitted_at. LEFT JOIN porque `supplier_quotes.supplier_id` es nullable. No está en
+`Base.metadata`: solo existe donde corrió Alembic (Supabase), no en el SQLite de los tests.
+
+### Migración `20260926_1539_80133b065ad3_lab_l1_rfq_batches_and_supplier_fields.py`
+
+Autogenerada contra un SQLite temporal migrado a head (el mismo método del paso
+`alembic check` del CI), porque en ese momento Supabase no conectaba. Retoques a mano: nombre
+de la FK (autogenerate la dejó `None` y el downgrade no podía borrarla) y la vista con
+`op.execute`. Validada en SQLite: upgrade → downgrade → upgrade → `alembic check` sin drift.
+El SQL offline para PostgreSQL renderiza limpio.
+
+Procedimiento reutilizable para la próxima migración (no toca `.env`):
+
+```powershell
+$sq = "sqlite:///C:/ruta/temporal/autogen.db"
+$env:DATABASE_URL = $sq; $env:DATABASE_URL_DIRECT = $sq   # las dos, o .env gana
+uv run alembic upgrade head
+uv run alembic revision --autogenerate -m "nombre"
+uv run alembic check
+```
+
+### Tests (SQLite)
+
+```
+uv run pytest -q
+452 passed, 1 warning in 61.83s
+```
+
+Mismo resultado que L0. Ningún test de la base se rompió por las columnas nuevas.
+`ruff check . ../agents ../comparison`: sin errores.
+
+### Archivos de la base tocados en L1
+
+`app/models.py`, `features/rfq/model.py`, `features/supplier/model.py`,
+`features/quote/model.py` (columnas y registro). Nuevos: `features/rfq/batch_model.py`,
+la migración, y esta sección.

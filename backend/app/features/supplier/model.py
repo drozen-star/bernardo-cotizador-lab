@@ -6,7 +6,12 @@ that points at both, which is what makes the public form link unique per
 (RFQ, supplier) pair.
 """
 
+from datetime import datetime
+
+from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
+from sqlalchemy import Integer
+from sqlalchemy import JSON
 from sqlalchemy import String
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped
@@ -90,6 +95,43 @@ class Supplier(TimestampMixin, Base):
     external_ref: Mapped[str | None] = mapped_column(
         String(128),
         nullable=True,
+    )
+
+    # ------------------------------------------------------------------ lab L1
+    #: Número de WhatsApp en formato internacional (+54911...). Canal principal de
+    #: contacto con proveedores de obra en LATAM; ``phone`` queda para el fijo.
+    whatsapp_phone: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+
+    #: Rubros que provee, p. ej. ["hierro", "cemento", "sanitarios"]. Lista JSON,
+    #: no Enum, para sumar rubros sin migración.
+    rubros: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    #: Último contacto saliente (invitación o recordatorio) por cualquier canal.
+    last_contacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    #: Cotizaciones recibidas y adjudicaciones ganadas, acumuladas. Alimentan el
+    #: historial del proveedor; nullable con default 0 para no romper filas viejas.
+    quoted_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=0,
+        server_default="0",
+    )
+
+    awarded_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=0,
+        server_default="0",
     )
 
     owner = relationship(

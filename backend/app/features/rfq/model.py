@@ -220,9 +220,30 @@ class RFQ(TimestampMixin, Base):
         nullable=True,
     )
 
+    # ------------------------------------------------------------ batch (lab L1)
+    #: El batch (pedido de N ítems) al que pertenece este RFQ. Nullable para que
+    #: los caminos de la base (manual, CSV, PDF, tests) sigan creando RFQs sueltos.
+    #: SET NULL al borrar el batch: el ítem queda, solo pierde la agrupación.
+    rfq_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "rfq_batches.id",
+            ondelete="SET NULL",
+            # Con nombre: la migración tiene que poder hacer drop_constraint en el
+            # downgrade, y SQLite en batch mode solo lo encuentra si está nombrada.
+            name="fk_rfqs_rfq_batch_id_rfq_batches",
+        ),
+        nullable=True,
+        index=True,
+    )
+
     # -------------------------------------------------------------- relations
     owner = relationship(
         "User",
+        back_populates="rfqs",
+    )
+
+    batch = relationship(
+        "RFQBatch",
         back_populates="rfqs",
     )
 

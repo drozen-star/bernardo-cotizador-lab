@@ -12,6 +12,7 @@ from app.features.comparison.model import Comparison  # noqa: F401
 from app.features.followup.model import FollowUp  # noqa: F401
 from app.features.invitation.model import Invitation  # noqa: F401
 from app.features.quote.model import SupplierQuote  # noqa: F401
+from app.features.rfq.batch_model import RFQBatch  # noqa: F401  (lab L1)
 from app.features.rfq.model import RFQ  # noqa: F401
 from app.features.supplier.model import Supplier  # noqa: F401
 
@@ -21,6 +22,7 @@ __all__ = [
     "FollowUp",
     "Invitation",
     "RFQ",
+    "RFQBatch",
     "Supplier",
     "SupplierQuote",
     "User",

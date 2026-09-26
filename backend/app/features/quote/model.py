@@ -18,6 +18,7 @@ from datetime import date
 from datetime import datetime
 from decimal import Decimal
 
+from sqlalchemy import Boolean
 from sqlalchemy import Date
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
@@ -322,6 +323,21 @@ class SupplierQuote(TimestampMixin, Base):
     #: given, tax is derived from it so the final cost is not a surprise.
     gst_rate: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2),
+        nullable=True,
+    )
+
+    # ------------------------------------------------------------------ lab L1
+    #: Si el precio informado ya incluye IVA. NULL = el proveedor no lo aclaró, y
+    #: eso es un dato en sí (dispara la repregunta). ``Boolean`` y no ``Integer``:
+    #: ver test_postgres_compat sobre ``.is_(True)``.
+    iva_included: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    #: Si el precio incluye el flete hasta la obra. Misma semántica del NULL.
+    freight_included: Mapped[bool | None] = mapped_column(
+        Boolean,
         nullable=True,
     )
 
