@@ -49,6 +49,39 @@ def messages_url(version: str, phone_number_id: str) -> str:
     return f"{GRAPH_BASE}/{version}/{phone_number_id}/messages"
 
 
+def _rejection(response: httpx.Response) -> SenderError:
+    """Loguea el motivo del rechazo de Meta y arma el SenderError.
+
+    El error de Graph viene como ``{"error": {"code", "error_subcode", "type", "message",
+    "fbtrace_id"}}``; puede no ser JSON o no traer "error". Nunca se vuelca el cuerpo crudo,
+    ni el token, ni el payload, ni el destino: solo los campos del error, con el mensaje
+    truncado a 200 caracteres.
+    """
+
+    try:
+        error = response.json().get("error") or {}
+    except (ValueError, AttributeError):
+        error = None
+
+    if not isinstance(error, dict) or not error:
+        logger.warning("whatsapp.sender Meta rechazó HTTP %s: cuerpo no JSON o sin 'error'", response.status_code)
+        return SenderError("meta_rejected", f"HTTP {response.status_code} sin detalle", status_code=response.status_code)
+
+    code = error.get("code")
+    message = str(error.get("message") or "")[:200]
+
+    logger.warning(
+        "whatsapp.sender Meta rechazó HTTP %s code=%s subcode=%s type=%s fbtrace_id=%s message=%s",
+        response.status_code, code, error.get("error_subcode"), error.get("type"), error.get("fbtrace_id"), message,
+    )
+
+    # Meta suele repetir el código al inicio del mensaje: no se duplica el prefijo.
+    prefix = f"(#{code})"
+    detail = message if message.startswith(prefix) else f"{prefix} {message}".strip()
+
+    return SenderError("meta_rejected", detail, status_code=response.status_code)
+
+
 def send_text(to_raw_wa_id: str, body: str, *, client: httpx.Client | None = None) -> str:
     """Manda ``body`` a ``to_raw_wa_id`` y devuelve el wa_message_id de Meta.
 
@@ -83,8 +116,7 @@ def send_text(to_raw_wa_id: str, body: str, *, client: httpx.Client | None = Non
             client.close()
 
     if response.status_code >= 400:
-        logger.warning("whatsapp.sender Meta respondió HTTP %s", response.status_code)
-        raise SenderError("meta_rejected", response.text[:300], status_code=response.status_code)
+        raise _rejection(response)
 
     try:
         return str(response.json()["messages"][0]["id"])

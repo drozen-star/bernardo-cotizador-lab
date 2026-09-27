@@ -172,6 +172,52 @@ def test_sender_raises_typed_error_when_meta_rejects(monkeypatch):
     assert excinfo.value.status_code == 400
 
 
+def test_sender_logs_meta_error_fields_without_secrets(monkeypatch, caplog):
+    _configured(monkeypatch)
+    meta_error = {
+        "error": {
+            "message": "(#131030) Recipient phone number not in allowed list",
+            "type": "OAuthException",
+            "code": 131030,
+            "error_subcode": 2655007,
+            "fbtrace_id": "AbCdEf123456",
+        }
+    }
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(400, json=meta_error)))
+
+    with caplog.at_level("WARNING", logger="app.features.whatsapp.sender"):
+        with pytest.raises(sender.SenderError) as excinfo:
+            sender.send_text("5491155551234", "Hola, Raúl, texto secreto del borrador", client=client)
+
+    assert excinfo.value.code == "meta_rejected"
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "(#131030) Recipient phone number not in allowed list"
+
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert "HTTP 400" in log
+    assert "code=131030" in log and "subcode=2655007" in log and "type=OAuthException" in log
+    assert "fbtrace_id=AbCdEf123456" in log
+    assert "Recipient phone number not in allowed list" in log
+    assert "EAAB-token" not in log
+    assert "texto secreto del borrador" not in log
+    assert "5491155551234" not in log
+
+
+def test_sender_survives_a_non_json_rejection(monkeypatch, caplog):
+    _configured(monkeypatch)
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(502, text="<html>Bad Gateway</html>")))
+
+    with caplog.at_level("WARNING", logger="app.features.whatsapp.sender"):
+        with pytest.raises(sender.SenderError) as excinfo:
+            sender.send_text("5491155551234", "x", client=client)
+
+    assert excinfo.value.code == "meta_rejected"
+    assert excinfo.value.status_code == 502
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert "HTTP 502" in log and "cuerpo no JSON" in log
+    assert "<html>" not in log
+
+
 def test_sender_raises_when_graph_is_unreachable(monkeypatch):
     _configured(monkeypatch)
 
