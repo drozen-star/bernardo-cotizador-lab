@@ -47,6 +47,14 @@ class WhatsappSettings(BaseSettings):
     #: Ventana de atención de Meta: solo se responde dentro de las 24 h del último inbound.
     WHATSAPP_WINDOW_HOURS: int = 24
 
+    # ------------------------------------------------------------ L5e: adjuntos
+    #: Tope del texto que sale de un adjunto (xlsx, PDF o foto) antes de entrar al historial.
+    WHATSAPP_MAX_ATTACHMENT_CHARS: int = 12000
+    #: Tope del archivo a descargar de Meta (10 MiB).
+    WHATSAPP_MAX_ATTACHMENT_BYTES: int = 10485760
+    #: Modelo para transcribir adjuntos. Vacío = el del agente (``loop.resolve_model()``).
+    WHATSAPP_ATTACHMENT_MODEL: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

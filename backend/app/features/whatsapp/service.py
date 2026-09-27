@@ -184,6 +184,7 @@ def handle_inbound(
     *,
     client: ModelClient | None = None,
     wa_message_id: str | None = None,
+    existing_inbound: WhatsappMessage | None = None,
 ) -> InboundResult:
     conversation = db.get(WhatsappConversation, conversation_id)
 
@@ -191,22 +192,27 @@ def handle_inbound(
         raise NotFoundError("Conversation not found")
 
     settings = whatsapp_settings
-    sanitized = guardrails.sanitize_inbound(
-        text, max_chars=settings.WHATSAPP_MAX_INPUT_CHARS, tag=settings.WHATSAPP_INPUT_TAG
-    )
 
-    inbound = WhatsappMessage(
-        conversation_id=conversation.id,
-        direction="inbound",
-        body=sanitized.clean,
-        wa_message_id=wa_message_id,
-        guardrail_flags=list(sanitized.flags),
-        received_at=utcnow(),
-    )
+    if existing_inbound is not None:
+        # L5e: el inbound ya está guardado y saneado (adjunto procesado por el job).
+        inbound = existing_inbound
+    else:
+        sanitized = guardrails.sanitize_inbound(
+            text, max_chars=settings.WHATSAPP_MAX_INPUT_CHARS, tag=settings.WHATSAPP_INPUT_TAG
+        )
 
-    db.add(inbound)
-    db.commit()
-    db.refresh(inbound)
+        inbound = WhatsappMessage(
+            conversation_id=conversation.id,
+            direction="inbound",
+            body=sanitized.clean,
+            wa_message_id=wa_message_id,
+            guardrail_flags=list(sanitized.flags),
+            received_at=utcnow(),
+        )
+
+        db.add(inbound)
+        db.commit()
+        db.refresh(inbound)
 
     if not conversation.is_open:
         logger.info("Conversación %s en %s: inbound guardado, el agente no corre", conversation.id, conversation.status)

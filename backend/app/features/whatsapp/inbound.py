@@ -33,6 +33,7 @@ from app.features.rfq.batch_model import RFQBatch
 from app.features.rfq.model import RFQ
 from app.features.supplier.model import Supplier
 from app.features.whatsapp import guardrails
+from app.features.whatsapp.attachments import pending as attachments_pending
 from app.features.whatsapp.loop import default_client
 from app.features.whatsapp.model import WhatsappConversation
 from app.features.whatsapp.model import WhatsappMessage
@@ -71,6 +72,11 @@ class InboundPayload(BaseModel):
     timestamp: str = Field(max_length=64)
     type: str = Field(min_length=1, max_length=32)
     text: str | None = Field(default=None, max_length=20_000)
+    # L5e: adjuntos (document, image). El lab descarga el archivo con el media_id.
+    media_id: str | None = Field(default=None, max_length=256)
+    mime_type: str | None = Field(default=None, max_length=128)
+    filename: str | None = Field(default=None, max_length=255)
+    caption: str | None = Field(default=None, max_length=3000)
 
     @property
     def is_text(self) -> bool:
@@ -83,9 +89,12 @@ class Decision:
     reason: str
     conversation_id: int | None = None
     supplier_id: int | None = None
-    #: "agent": encolar handle_inbound · "persisted": ya se guardó sin agente · None: nada
+    #: "agent": encolar handle_inbound · "attachment": encolar el job del adjunto ·
+    #: "persisted": ya se guardó sin agente · None: nada
     action: str | None = None
     flags: list[str] = field(default_factory=list)
+    #: El inbound provisorio del adjunto (L5e), para que el job lo complete.
+    message_id: int | None = None
 
 
 # ------------------------------------------------------------------ lookups
@@ -253,7 +262,7 @@ def decide(db: Session, payload: InboundPayload) -> Decision:
         return Decision(owned=True, reason=REASON_HOLD, conversation_id=conversation.id, supplier_id=supplier.id, action="persisted")
 
     if conversation is None or not conversation.is_open:
-        batch = resolve_batch(db, supplier, payload.text)
+        batch = resolve_batch(db, supplier, payload.text or payload.caption)
 
         if batch is None:
             return Decision(owned=False, reason=REASON_NO_ACTIVE, supplier_id=supplier.id)
@@ -262,6 +271,14 @@ def decide(db: Session, payload: InboundPayload) -> Decision:
         reason = REASON_OPENED_NOW
 
     _touch_destination(db, conversation, payload.from_)
+
+    if attachments_pending.is_attachment(payload):
+        # L5e: provisorio en el request; el job de background descarga y transcribe.
+        message = attachments_pending.persist_pending(db, conversation, payload)
+        return Decision(
+            owned=True, reason=reason, conversation_id=conversation.id, supplier_id=supplier.id,
+            action="attachment", flags=[attachments_pending.FLAG_PENDING], message_id=message.id,
+        )
 
     if not payload.is_text:
         persist_without_agent(db, conversation, payload, flags=[FLAG_UNSUPPORTED_MEDIA])
