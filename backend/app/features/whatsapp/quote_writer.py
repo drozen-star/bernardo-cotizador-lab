@@ -35,10 +35,15 @@ from app.features.whatsapp.model import WhatsappConversation
 _DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 
 
-def normalize_text(text: str) -> str:
-    """Minúsculas y espacios colapsados: la comparación literal tolerante."""
+#: Marcado de WhatsApp/markdown y el signo de pesos: no cuentan para la literalidad.
+#: Un proveedor real escribe "*Cemento:* $12.500" y el modelo cita "Cemento: 12.500".
+_IGNORED_FOR_LITERALITY = re.compile(r"[*_~`$]")
 
-    return " ".join((text or "").lower().split())
+
+def normalize_text(text: str) -> str:
+    """Minúsculas, sin marcado ni "$", espacios colapsados: la comparación literal tolerante."""
+
+    return " ".join(_IGNORED_FOR_LITERALITY.sub("", text or "").lower().split())
 
 
 def evidence_is_literal(evidence: str, inbound_bodies: list[str]) -> bool:
@@ -188,9 +193,21 @@ class QuoteToolExecutor:
 
         unit_price = _to_decimal(tool_input.get("unit_price"))
 
+        quote = self._find_quote(rfq_id)
+        created = quote is None
+
         # Con precio declarado, la evidencia además tiene que contener ese número: la cita
         # literal sola no alcanza para respaldar un valor que el proveedor no escribió.
-        if unit_price is not None and not price_in_evidence(unit_price, evidence):
+        # Excepción (L3b): si el quote ya existe con ese mismo precio, se está corrigiendo otra
+        # cosa (flete, pago, validez) y la evidencia nueva no tiene por qué repetir el número.
+        same_price = (
+            not created
+            and quote.unit_price is not None
+            and unit_price is not None
+            and abs(quote.unit_price - unit_price) <= PRICE_TOLERANCE
+        )
+
+        if unit_price is not None and not same_price and not price_in_evidence(unit_price, evidence):
             return ToolOutcome(
                 content=(
                     f"Rechazado: el precio no figura en la evidencia citada. Declaraste {unit_price} "
@@ -199,9 +216,6 @@ class QuoteToolExecutor:
                 ),
                 ok=False,
             )
-
-        quote = self._find_quote(rfq_id)
-        created = quote is None
 
         if created:
             quote = SupplierQuote(

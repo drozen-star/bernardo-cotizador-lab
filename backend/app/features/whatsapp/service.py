@@ -48,6 +48,20 @@ logger = logging.getLogger(__name__)
 CLOSING_REPLY = "Gracias. Con esto tengo lo que necesito; {buyer_company} lo revisa y te escribimos."
 
 FLAG_TOOL_ROUNDS_EXHAUSTED = "tool_rounds_exhausted"
+FLAG_MAX_TOKENS_EXHAUSTED = "max_tokens_exhausted"
+
+#: Falla técnica del turno (corrección L3b): la conversación queda OPEN con este flag y un
+#: borrador con la respuesta segura; el próximo inbound vuelve a correr el agente. Un
+#: tropiezo del modelo no cierra una conversación buena.
+FLAG_TECHNICAL_ERROR = "technical_error"
+TECHNICAL_FLAGS = (guardrails.FLAG_EMPTY_REPLY, FLAG_MAX_TOKENS_EXHAUSTED, FLAG_TOOL_ROUNDS_EXHAUSTED)
+
+#: Frenos de contenido: estos sí cierran en needs_human.
+CONTENT_BLOCKING_FLAGS = (
+    guardrails.FLAG_PURCHASE_COMMITMENT,
+    guardrails.FLAG_PAYMENT_DATA,
+    guardrails.FLAG_PROMPT_LEAK,
+)
 
 
 @dataclass
@@ -247,6 +261,7 @@ def _run_agent(
         buyer_company=buyer_company,
         quotes=_conversation_quotes(db, conversation.id),
         tag=settings.WHATSAPP_INPUT_TAG,
+        buyer_questions=prompts.asked_buyer_questions(messages),
     )
 
     executor = QuoteToolExecutor(
@@ -267,7 +282,10 @@ def _run_agent(
         max_tokens=settings.WHATSAPP_MAX_TOKENS,
     )
 
-    conversation.input_tokens = (conversation.input_tokens or 0) + turn.input_tokens
+    # input_tokens acumula TODO lo que entró (sin caché + escrito + leído de caché); el
+    # desglose por caché va en tool_calls ("model_calls") porque sumar columnas a la
+    # conversación pediría una migración (L3b).
+    conversation.input_tokens = (conversation.input_tokens or 0) + turn.total_input_tokens
     conversation.output_tokens = (conversation.output_tokens or 0) + turn.output_tokens
     conversation.model_calls = (conversation.model_calls or 0) + turn.model_calls
 
@@ -282,7 +300,13 @@ def _run_agent(
 
     if turn.exhausted:
         flags.append(FLAG_TOOL_ROUNDS_EXHAUSTED)
-        close_conversation(conversation, "needs_human", "el agente agotó las vueltas de herramientas sin cerrar")
+
+    if turn.max_tokens_exhausted:
+        flags.append(FLAG_MAX_TOKENS_EXHAUSTED)
+
+    if (turn.exhausted or turn.max_tokens_exhausted) and not text:
+        # Ya sabemos por qué no hay texto: la respuesta segura va directo, sin que el
+        # freno lo cuente además como empty_reply.
         text = settings.WHATSAPP_SAFE_REPLY
 
     review = guardrails.review_outbound(
@@ -290,10 +314,28 @@ def _run_agent(
     )
     flags += review.flags
 
-    if review.blocked and not turn.exhausted:
-        close_conversation(conversation, "needs_human", "freno de salida: " + ", ".join(review.blocking_flags))
+    content_blocking = [flag for flag in review.flags if flag in CONTENT_BLOCKING_FLAGS]
+    technical = [flag for flag in flags if flag in TECHNICAL_FLAGS]
+
+    if content_blocking:
+        # Compromiso, datos de pago o fuga: una persona tiene que mirar esto.
+        close_conversation(conversation, "needs_human", "freno de salida: " + ", ".join(content_blocking))
+    elif technical:
+        # Falla técnica: respuesta segura como borrador y la conversación sigue abierta.
+        flags.append(FLAG_TECHNICAL_ERROR)
+        review.text = settings.WHATSAPP_SAFE_REPLY
+        logger.warning("Conversación %s: falla técnica del agente (%s); sigue open", conversation.id, ", ".join(technical))
 
     tool_calls = list(turn.tool_calls)
+    tool_calls.append(
+        {
+            "name": "model_calls",
+            "stop_reasons": list(turn.stop_reasons),
+            "usage": list(turn.usage_per_call),
+            "cache_creation_input_tokens": turn.cache_creation_input_tokens,
+            "cache_read_input_tokens": turn.cache_read_input_tokens,
+        }
+    )
 
     if executor.buyer_questions:
         tool_calls.append({"name": "buyer_questions", "questions": list(executor.buyer_questions)})

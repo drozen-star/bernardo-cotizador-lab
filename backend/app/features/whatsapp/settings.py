@@ -13,8 +13,10 @@ class WhatsappSettings(BaseSettings):
     #: Modelo del agente conversador. SDK nativo de Anthropic (spec sección 7).
     BERNARDO_MODEL: str = "claude-sonnet-5"
 
-    #: Tope de tokens de salida por llamada al modelo.
-    WHATSAPP_MAX_TOKENS: int = 1024
+    #: Tope de tokens de salida por llamada al modelo. 4096 porque cinco record_quote
+    #: completos en una respuesta necesitan ~1.500-2.500 tokens: con 1024 el modelo se
+    #: cortaba a mitad de camino (corrida 20260926-2041-2 del simulador).
+    WHATSAPP_MAX_TOKENS: int = 4096
 
     #: Vueltas de herramientas por mensaje del proveedor. Si no cierra, needs_human.
     WHATSAPP_MAX_TOOL_ROUNDS: int = 5

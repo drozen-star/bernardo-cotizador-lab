@@ -39,9 +39,25 @@ def tool_use(name, tool_input, id_="tu_1"):
     return NS(type="tool_use", name=name, input=tool_input, id=id_)
 
 
-def reply(*blocks, stop=None, usage=(100, 20)):
+def reply(*blocks, stop=None, usage=(100, 20), cache=(0, 0)):
     stop = stop or ("tool_use" if any(b.type == "tool_use" for b in blocks) else "end_turn")
-    return NS(content=list(blocks), stop_reason=stop, usage=NS(input_tokens=usage[0], output_tokens=usage[1]))
+    return NS(
+        content=list(blocks),
+        stop_reason=stop,
+        usage=NS(
+            input_tokens=usage[0],
+            output_tokens=usage[1],
+            cache_creation_input_tokens=cache[0],
+            cache_read_input_tokens=cache[1],
+        ),
+    )
+
+
+def system_of(call) -> str:
+    """El system de una llamada al cliente falso, venga como string o como bloques cacheados."""
+
+    system = call["system"]
+    return system if isinstance(system, str) else "".join(block["text"] for block in system)
 
 
 class FakeMessages:
@@ -251,7 +267,7 @@ def test_correction_updates_the_same_quote_and_keeps_both_calls_in_tool_calls(db
     assert [m.tool_calls[0]["input"]["unit_price"] for m in outbounds] == [9800, 9500]
 
     # El segundo turno vio lo ya registrado en el system prompt.
-    system = fake.calls[0]["system"]
+    system = system_of(fake.calls[0])
     assert "YA REGISTRADO EN ESTA CONVERSACIÓN" in system
     assert f"rfq_id {world.cemento.id} | Cemento CPN40 | 9800" in system
 
@@ -293,11 +309,13 @@ def test_injection_arrives_wrapped_as_data(db_session, world):
     assert messages[-1]["role"] == "user"
     assert messages[-1]["content"] == f"<{TAG}>\n{injection}\n</{TAG}>"
     assert messages[0]["content"].startswith(f"<{TAG}>")
-    assert f"dentro de <{TAG}>" in fake.calls[0]["system"]
+    assert f"dentro de <{TAG}>" in system_of(fake.calls[0])
 
 
 # --------------------------------------------------------------------- loop
-def test_six_tool_rounds_end_in_needs_human(db_session, world):
+def test_six_tool_rounds_are_a_technical_error_and_keep_the_conversation_open(db_session, world):
+    # L3a cerraba en needs_human; desde L3b las vueltas agotadas son falla técnica: la
+    # conversación sigue open con borrador seguro y el próximo inbound reintenta.
     conversation, _ = _greet(db_session, world)
     fake = FakeClient([
         reply(tool_use("ask_buyer", {"question": f"pregunta {i}"}, id_=f"t{i}")) for i in range(6)
@@ -305,11 +323,12 @@ def test_six_tool_rounds_end_in_needs_human(db_session, world):
 
     result = handle_inbound(db_session, conversation.id, "???", client=fake)
 
-    assert conversation.status == "needs_human"
+    assert conversation.status == "open"
     assert conversation.model_calls == 5
     assert len(fake.messages.script) == 1  # la sexta respuesta nunca se pidió
     assert result.outbound.body == whatsapp_settings.WHATSAPP_SAFE_REPLY
     assert FLAG_TOOL_ROUNDS_EXHAUSTED in result.outbound.guardrail_flags
+    assert "technical_error" in result.outbound.guardrail_flags
     assert len([c for c in result.outbound.tool_calls if c["name"] == "ask_buyer"]) == 5
 
 

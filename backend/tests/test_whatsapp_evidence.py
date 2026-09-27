@@ -112,6 +112,51 @@ def test_declared_price_different_from_the_evidence_is_rejected(db_session, worl
     assert db_session.query(SupplierQuote).count() == 0
 
 
+# ------------------------------------------ Q2: marcado de WhatsApp en la literalidad
+@pytest.mark.parametrize(
+    "inbound",
+    [
+        "*Cemento:* 12.500 con IVA la bolsa",
+        "**Cemento:** 12.500 con IVA la bolsa",
+        "_Cemento:_ $12.500 con IVA la bolsa",
+        "~Cemento:~ `12.500` con IVA la bolsa",
+    ],
+)
+def test_markdown_in_the_inbound_does_not_break_literal_evidence(db_session, world, inbound):  # noqa: F811
+    conversation, call = _turn(db_session, world, inbound, "cemento: 12.500 con iva", 12500)
+
+    assert call["ok"] is True, call["result"]
+    assert float(_quotes(db_session, conversation)[0].unit_price) == 12500
+
+
+def test_invented_evidence_is_still_rejected_with_markdown_around(db_session, world):  # noqa: F811
+    conversation, call = _turn(db_session, world, "*Cemento:* 12.500 con IVA la bolsa", "cemento: 12.900 con iva", 12900)
+
+    assert call["ok"] is False
+    assert call["result"].startswith("Rechazado: evidence")
+    assert _quotes(db_session, conversation) == []
+
+
+# --------------------------------- Q1: corrección con el mismo precio no exige el número
+def test_existing_quote_with_a_different_price_still_needs_the_number(db_session, world):  # noqa: F811
+    conversation, _ = _greet(db_session, world)
+
+    handle_inbound(db_session, conversation.id, "Cemento 12900 con IVA", client=FakeClient([
+        reply(record(world.cemento.id, "cemento 12900 con iva", price=12900)),
+        reply(text("Anotado.")),
+    ]))
+
+    result = handle_inbound(db_session, conversation.id, "Perdón, el cemento me quedó en 12500, flete incluido", client=FakeClient([
+        reply(record(world.cemento.id, "flete incluido", price=12500, freight_included=True, id_="fix")),
+        reply(text("Gracias.")),
+    ]))
+
+    call = result.outbound.tool_calls[0]
+    assert call["ok"] is False
+    assert "el precio no figura en la evidencia citada" in call["result"]
+    assert float(_quotes(db_session, conversation)[0].unit_price) == 12900  # no se pisó
+
+
 def test_null_price_keeps_only_the_literal_check(db_session, world):  # noqa: F811
     conversation, call = _turn(db_session, world, "El cemento lo entrego en 3 días", "lo entrego en 3 días", None)
 

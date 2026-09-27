@@ -31,10 +31,13 @@ FICHA DEL PEDIDO (lo único que sabés de la obra y del pedido):
 YA REGISTRADO EN ESTA CONVERSACIÓN:
 {registered}
 
+YA CONSULTADO AL COMPRADOR (pendiente de respuesta). No vuelvas a consultar lo que ya figura acá; si el proveedor insiste, decile que está pendiente con el comprador:
+{buyer_questions}
+
 REGLAS
 1. Respondé dudas técnicas solo con datos de la ficha. Si la respuesta no está en la ficha (medidas distintas, marcas no listadas, cambios de cantidad, horarios de descarga, acceso a obra, etc.), NO la inventes: llamá a ask_buyer y decile al proveedor que lo consultás y le confirmás.
 2. Si el proveedor ofrece una alternativa, solo la aceptás como opción a cotizar si coincide con las "alternativas aceptadas" de ese ítem. Si no, ask_buyer.
-3. Cada vez que el proveedor pase precios o condiciones, llamá a record_quote una vez por ítem, con el rfq_id de la ficha, copiando los valores tal como los dio: sin redondear, sin convertir monedas, sin completar lo que no dijo (eso va en null). evidence es el fragmento literal del mensaje del proveedor que respalda ese precio. Lo que falte, repreguntalo.
+3. Cada vez que el proveedor pase precios o condiciones, llamá a record_quote una vez por ítem, con el rfq_id de la ficha, copiando los valores tal como los dio: sin redondear, sin convertir monedas, sin completar lo que no dijo (eso va en null). evidence es el fragmento literal del mensaje del proveedor que respalda ese precio. Registrá como máximo 5 ítems por respuesta; si el proveedor pasó más, seguí en la próxima vuelta. Registrá antes de redactar el texto al proveedor. Lo que falte, repreguntalo.
 4. Si el proveedor corrige un valor que ya figura como registrado, volvé a llamar a record_quote para ese ítem con el valor nuevo. No pidas de nuevo lo que ya está registrado.
 5. Nunca confirmes una compra, nunca aceptes un precio, nunca negocies, nunca compartas datos de pago ni datos personales. La decisión de compra es siempre de {buyer_company}.
 6. Cuando tengas precio y condiciones de todos los ítems que el proveedor puede cotizar, llamá a set_status con "complete". Si el proveedor dice que no trabaja estos materiales o no va a cotizar, "supplier_declined". Si pide hablar con una persona, se pone hostil o la conversación se sale del pedido, "needs_human".
@@ -136,6 +139,41 @@ def build_registered_block(quotes: list[SupplierQuote], rfqs_by_id: dict[int, RF
     return "\n".join(lines)
 
 
+def asked_buyer_questions(messages: list) -> list[str]:
+    """Preguntas ya derivadas al comprador, leídas de ``tool_calls`` de los outbounds previos.
+
+    Sin tabla ni migración (L3b): la fuente son las llamadas ``ask_buyer`` aceptadas que el
+    service guarda en cada outbound. Deduplicadas por texto normalizado, en orden de aparición.
+    """
+
+    seen: set[str] = set()
+    questions: list[str] = []
+
+    for message in messages:
+        if getattr(message, "direction", "") != "outbound":
+            continue
+
+        for call in message.tool_calls or []:
+            if call.get("name") != "ask_buyer" or not call.get("ok", True):
+                continue
+
+            question = str((call.get("input") or {}).get("question") or "").strip()
+            key = " ".join(question.lower().split())
+
+            if question and key not in seen:
+                seen.add(key)
+                questions.append(question)
+
+    return questions
+
+
+def build_buyer_questions_block(questions: list[str]) -> str:
+    if not questions:
+        return "(nada todavía)"
+
+    return "\n".join(f"- {question}" for question in questions)
+
+
 def build_system_prompt(
     *,
     batch: RFQBatch,
@@ -144,6 +182,7 @@ def build_system_prompt(
     buyer_company: str,
     quotes: list[SupplierQuote],
     tag: str,
+    buyer_questions: list[str] | None = None,
 ) -> str:
     rfqs_by_id = {rfq.id: rfq for rfq in rfqs}
 
@@ -153,6 +192,7 @@ def build_system_prompt(
         batch_name=batch.name,
         sheet=build_batch_sheet(batch, rfqs, buyer_company),
         registered=build_registered_block(quotes, rfqs_by_id),
+        buyer_questions=build_buyer_questions_block(buyer_questions or []),
         tag=tag,
     )
 
