@@ -1,249 +1,142 @@
 # =============================================================================
-# Render Blueprint — Supplier Quote Autopilot API
+# Render Blueprint — Laboratorio Bernardo Cotizador (L4)
 # =============================================================================
-# Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+# Solo el web service del backend. Sin base de Render (la base es Supabase), sin
+# frontends (no hacen falta para el lab de WhatsApp) y sin migraciones ni seeds en
+# el start command: la migración se aplica a mano antes del deploy
+# (docs/CHECKLIST-DEPLOY-L4.md).
 #
-# This file provisions ONLY the backend. The two frontends go to Vercel (see the
-# README), and the database is Neon rather than Render Postgres — Render's free
-# Postgres expires after 30 days, which would silently take the app down.
-#
-# Free-tier facts this file is built around:
-#   * 512 MB RAM / 0.1 CPU          -> keep the process light; no worker process
-#   * spins down after 15 min idle  -> /health + an external cron (below)
-#   * 750 instance hours/month      -> one web service, no background worker
-#   * no persistent disk            -> STORAGE_BACKEND=s3 is mandatory
-#   * SMTP ports 25/465/587 BLOCKED -> EMAIL_PROVIDER is an HTTPS API
-#
-# WHY THERE IS NO worker/ OR cron: SERVICES HERE
-#   A Render Cron Job or Background Worker is a second billable service and would
-#   break the 750 free hours. The follow-up scheduler therefore runs (a) as a
-#   background task inside this web service and (b) behind
-#   POST /internal/scheduler/tick, which any free external cron can drive. That
-#   second path is what actually guarantees a schedule once the service has spun
-#   down — see README "Keeping the free tier alive".
+# Plan starter (USD 7): sin spin-down, 512 MB. Todas las variables se cargan en el
+# dashboard (sync: false): ninguna vive en el repo.
 # =============================================================================
 
 services:
   - type: web
-    name: supplier-quote-autopilot-api
+    name: bernardo-cotizador-lab-api
     runtime: python
 
-    # The repository keeps `agents/` and `comparison/` as siblings of `backend/`,
-    # and `app/__init__.py` resolves them from the repository root. Render clones
-    # the whole repo, so rootDir only changes the working directory — the sibling
-    # packages stay reachable.
+    # agents/ y comparison/ son hermanos de backend/; app/__init__.py los resuelve
+    # desde la raíz del repo, así que rootDir solo cambia el directorio de trabajo.
     rootDir: backend
 
-    plan: free
-    region: oregon
+    plan: starter
+    # Supabase del lab está en sa-east-1; virginia es la región de Render más cercana.
+    region: virginia
     branch: main
 
-    # `requirements.txt` is generated from `uv.lock` by
-    #   uv export --format requirements-txt --no-dev --no-hashes --no-emit-project
-    # and CI fails if the two drift. Rendering it out means the start command can
-    # be the plain `uvicorn ...` form with no venv indirection.
+    # requirements.txt se genera desde uv.lock (CI verifica que no haya drift).
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
 
-    # Exactly the documented start command. `$PORT` is injected by Render.
+    # Sin alembic ni seed acá: solo la app. $PORT lo inyecta Render.
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
-    # /health always answers 200 (dependency trouble is reported in the body as
-    # "degraded") so UptimeRobot's ping counts as up and keeps the service warm.
+    # /health siempre responde 200; los problemas de dependencias van en el cuerpo.
     healthCheckPath: /health
 
-    # `autoDeploy`, not `autoDeployTrigger`: the short form has been in the
-    # blueprint schema far longer, and an unrecognised key fails blueprint
-    # validation outright rather than being ignored.
-    autoDeploy: true
+    autoDeploy: false
 
     envVars:
       # ---------------------------------------------------------------- runtime
       - key: ENV
-        value: production
-
-      # NOTE: PYTHON_VERSION is deliberately NOT set here. `backend/.python-version`
-      # already pins the version, and Render's native Python runtime reads that file.
-      # Declaring a second, different value (it used to say 3.13.7 while the file
-      # said 3.13) makes the effective version ambiguous, and if Render cannot
-      # resolve the exact patch it pins, the build fails before anything runs.
-      # One source of truth wins. If a build ever complains about the Python
-      # version, delete backend/.python-version and Render will use its default.
+        sync: false
 
       # --------------------------------------------------------------- database
-      # Set in the dashboard; Render must not store these in the repo.
+      # Session pooler de Supabase (aws-0-sa-east-1, puerto 5432), driver psycopg 3.
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_URL_DIRECT
         sync: false
-
       - key: DB_POOL_SIZE
-        value: "5"
+        sync: false
       - key: DB_MAX_OVERFLOW
-        value: "5"
+        sync: false
       - key: DB_POOL_RECYCLE_SECONDS
-        value: "300"
+        sync: false
 
       # ------------------------------------------------------------------- auth
-      # `generateValue: true` makes Render mint a strong secret on first deploy.
-      # Read it back from the dashboard if you need it elsewhere.
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
-        value: "10080"
+        sync: false
 
       # ------------------------------------------------------------------- URLs
-      # Fill in after the first Vercel deploy, then redeploy.
       - key: BACKEND_URL
         sync: false
       - key: FRONTEND_URL
         sync: false
       - key: PUBLIC_FORM_URL
         sync: false
-
-      # CORS. Comma-separated exact origins, scheme included, no trailing slash.
-      #
-      # This ships a wildcard rather than `sync: false` on purpose, because a blank
-      # box here is the worst of the three states. `sync: false` with no value gave
-      # the variable the empty string, which parses to an empty origin list — and an
-      # empty list rejects *every* browser origin with "400 Disallowed CORS origin".
-      # The API is up, /health is green, and the dashboard cannot make a single
-      # request: a total failure that looks like a frontend bug.
-      #
-      # `*` works immediately and the application logs a warning when a production
-      # deployment uses it, which is the nudge to replace it. So: deploy, confirm it
-      # works, then set the two origins below.
-      #   ALLOWED_ORIGINS=https://your-dashboard.vercel.app,https://your-supplier-form.vercel.app
       - key: ALLOWED_ORIGINS
-        value: "*"
-
-      # -------------------------------------------------------------------- LLM
-      # Groq by default. Swap all three for OpenRouter or Gemini — see the README.
-      - key: LLM_BASE_URL
-        value: https://api.groq.com/openai/v1
-      - key: LLM_MODEL
-        value: openai/gpt-oss-120b
-      - key: LLM_API_KEY
         sync: false
 
-      # Free-tier guardrails: Groq allows ~30 req/min and 14,400 req/day per model.
+      # ------------------------------------------------- agente de WhatsApp (L3)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: BERNARDO_MODEL
+        sync: false
+      - key: BERNARDO_WA_NUMBER
+        sync: false
+
+      # ------------------------------------------------- bot -> lab y envío (L4)
+      - key: LAB_SHARED_SECRET
+        sync: false
+      - key: LAB_ADMIN_TOKEN
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WA_GRAPH_VERSION
+        sync: false
+
+      # ------------------------------------------------- funciones LLM de la base
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
       - key: LLM_ENABLED
-        value: "true"
-      - key: LLM_REQUESTS_PER_MINUTE
-        value: "30"
-      - key: LLM_MAX_CONCURRENCY
-        value: "2"
-      - key: LLM_MAX_RETRIES
-        value: "4"
-      - key: LLM_TIMEOUT_SECONDS
-        value: "60"
-      # The default model reasons before it answers. "low" keeps that trace short
-      # enough for the JSON answer to fit the token budget; at the provider default
-      # Groq rejected every JSON call with HTTP 400 and all three LLM features fell
-      # back to their deterministic paths.
-      - key: LLM_REASONING_EFFORT
-        value: low
-      - key: LLM_BATCH_MAX_CALLS
-        value: "50"
+        sync: false
 
       # ------------------------------------------------------------------ email
-      # HTTPS only. smtp is not merely unused here, it does not exist in the code.
       - key: EMAIL_PROVIDER
-        value: resend
+        sync: false
       - key: EMAIL_API_KEY
         sync: false
       - key: MAIL_FROM
         sync: false
 
       # ---------------------------------------------------------------- storage
-      # Render free tier has no persistent disk, so `local` would lose every
-      # upload on the next deploy.
       - key: STORAGE_BACKEND
-        value: s3
+        sync: false
       - key: S3_ENDPOINT_URL
         sync: false
       - key: S3_BUCKET
         sync: false
       - key: S3_REGION
-        value: auto
+        sync: false
       - key: S3_ACCESS_KEY_ID
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
       - key: S3_PUBLIC_BASE_URL
         sync: false
-      - key: MAX_UPLOAD_MB
-        value: "10"
 
-      # ------------------------------------------------------------- public form
-      - key: INVITATION_TTL_DAYS
-        value: "30"
-      - key: PUBLIC_RATE_LIMIT_PER_MINUTE
-        value: "20"
-      - key: PUBLIC_RATE_LIMIT_PER_HOUR
-        value: "60"
-      - key: CAPTCHA_PROVIDER
-        value: none
-      - key: CAPTCHA_SITE_KEY
-        sync: false
-      - key: CAPTCHA_SECRET_KEY
-        sync: false
-
-      # -------------------------------------------------------------------- demo
-      # GET /demo/workspace — a sample tender anyone can read with no account.
-      # The payload is the committed snapshot at
-      # app/features/demo/workspace.json, regenerated with
-      #   python -m scripts.seed_demo --dump-demo
-      # It is a file rather than a query, so an anonymous visitor can never read
-      # real suppliers or prices, and nothing under /demo accepts a write.
-      # Set false to ship without a demo.
-      - key: DEMO_MODE_ENABLED
-        value: "true"
-
-      # -------------------------------------------------------------- follow-ups
-      # `false` = every reminder is queued as a draft for the buyer to approve.
-      # Flip to `true` to auto-send reminders. Awarding ALWAYS needs a human.
-      - key: AUTO_SEND_FOLLOWUPS
-        value: "false"
-      - key: FOLLOWUP_INTERVALS_HOURS
-        value: "72,168"
-      - key: FOLLOWUP_BEFORE_DEADLINE_HOURS
-        value: "48"
-      - key: MAX_FOLLOWUPS_PER_INVITATION
-        value: "3"
-      - key: MAX_INCOMPLETE_REMINDERS
-        value: "2"
-
+      # ------------------------------------------------------------- scheduler
       - key: SCHEDULER_ENABLED
-        value: "true"
-      - key: SCHEDULER_INTERVAL_MINUTES
-        value: "15"
-      # Required to enable POST /internal/scheduler/tick; the endpoint 403s while
-      # this is empty. Render mints one so the cron path works out of the box —
-      # copy the value into your cron's header.
-      - key: SCHEDULER_SECRET
-        generateValue: true
-
-      # -------------------------------------------------------- procurement type
-      # What a new RFQ is unless the buyer picks otherwise. `service` is building
-      # maintenance and minor works (electrical, mechanical, plumbing, painting,
-      # ACMV…): the service field contract, the service weights, and the services
-      # vocabulary. Set to `goods` for a supplies-only workspace.
-      - key: DEFAULT_PROCUREMENT_TYPE
-        value: service
-
-      # -------------------------------------------------------------- comparison
-      # Every price is normalized into this currency before anything is compared.
-      - key: BASE_CURRENCY
-        value: SGD
-      # GST applied when a supplier states a rate but no explicit tax amount.
-      # 9.0 is the current Singapore rate; set 0 if you are not GST-registered.
-      - key: DEFAULT_GST_RATE
-        value: "9.0"
-      - key: LEAD_TIME_RISK_DAYS
-        value: "90"
-      - key: QUOTE_VALIDITY_WARNING_DAYS
-        value: "7"
-      - key: FX_RATES_JSON
         sync: false
-      - key: DEFAULT_SCORING_WEIGHTS_JSON
+      - key: SCHEDULER_SECRET
+        sync: false
+      - key: AUTO_SEND_FOLLOWUPS
+        sync: false
+
+      # ----------------------------------------------------- compras / moneda
+      - key: DEFAULT_PROCUREMENT_TYPE
+        sync: false
+      - key: BASE_CURRENCY
+        sync: false
+      - key: DEFAULT_GST_RATE
+        sync: false
+      - key: DEMO_MODE_ENABLED
         sync: false

@@ -95,6 +95,13 @@ class WhatsappConversation(TimestampMixin, Base):
         nullable=True,
     )
 
+    #: L4: el ``from`` crudo de Meta (wa_id) del último inbound, tal cual llegó. Es el
+    #: destino de las respuestas; ``suppliers.whatsapp_phone`` es solo para reconocerlo.
+    wa_from: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
     # ------------------------------------------------------------- consumo
     #: Acumulados por conversación: primer dato de costo por cotización (spec 9.5).
     input_tokens: Mapped[int] = mapped_column(
@@ -186,10 +193,12 @@ class WhatsappMessage(TimestampMixin, Base):
         nullable=True,
     )
 
-    #: Id del mensaje en Cloud API. Llega en L4; acá queda NULL.
+    #: Id del mensaje en Cloud API. Único (L4): es la clave del dedupe de inbound y del
+    #: envío. NULL en los borradores hasta que se mandan; los NULL no chocan entre sí.
     wa_message_id: Mapped[str | None] = mapped_column(
         String(128),
         nullable=True,
+        unique=True,
         index=True,
     )
 

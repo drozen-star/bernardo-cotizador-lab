@@ -31,6 +31,21 @@ class WhatsappSettings(BaseSettings):
     #: Lo que sale cuando un freno de salida bloquea la respuesta del modelo.
     WHATSAPP_SAFE_REPLY: str = "Gracias. Lo reviso con el equipo y te confirmo por acá."
 
+    # ------------------------------------------------------------ L4: bot -> lab
+    #: Secreto compartido con el bot de Render (header X-Bernardo-Lab-Secret). Vacío = todo 401.
+    LAB_SHARED_SECRET: str = ""
+    #: Token de administración para aprobar borradores (header X-Bernardo-Lab-Admin). Distinto del anterior.
+    LAB_ADMIN_TOKEN: str = ""
+
+    # ------------------------------------------------------ L4: envío por Cloud API
+    WHATSAPP_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    #: Versión de Graph (p. ej. v21.0). Sin default a propósito: la fija el deploy.
+    WA_GRAPH_VERSION: str = ""
+    WHATSAPP_SEND_TIMEOUT_SECONDS: float = 10.0
+    #: Ventana de atención de Meta: solo se responde dentro de las 24 h del último inbound.
+    WHATSAPP_WINDOW_HOURS: int = 24
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

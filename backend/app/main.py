@@ -49,6 +49,7 @@ from app.features.rfq.batch_router import router as rfq_batch_router  # lab L2
 from app.features.rfq.router import meta_router
 from app.features.rfq.router import router as rfq_router
 from app.features.supplier.router import router as supplier_router
+from app.features.whatsapp.router import router as whatsapp_router  # lab L4
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,6 +141,10 @@ app = FastAPI(
             "name": "RFQ batches (lab)",
             "description": "Lab Bernardo: un Excel de materiales -> N RFQs y un mail por proveedor.",
         },
+        {
+            "name": "WhatsApp (lab)",
+            "description": "Lab Bernardo: inbound del bot de Render y aprobación humana de borradores.",
+        },
         {"name": "Suppliers", "description": "The buyer's supplier directory."},
         {"name": "Invitations", "description": "Tokenized form links per supplier."},
         {"name": "Quotes", "description": "Quotes from every source."},
@@ -184,6 +189,9 @@ app.include_router(chat_router)
 # ---- public (token-authenticated) ------------------------------------------
 app.include_router(meta_router)
 app.include_router(public_form_router)
+
+# ---- lab L4: bot de WhatsApp (secreto compartido) y aprobación (token admin) --
+app.include_router(whatsapp_router)
 
 # ---- public (no credential at all, read-only) -------------------------------
 # The demo is deliberately mounted here, apart from the authenticated routers: it
