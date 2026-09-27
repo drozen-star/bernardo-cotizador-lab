@@ -10,11 +10,14 @@ criterio de la base para ``rfqs.required_fields`` y compañía.
 """
 
 from datetime import datetime
+from decimal import Decimal
 
+from sqlalchemy import CheckConstraint
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import JSON
+from sqlalchemy import Numeric
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy.orm import Mapped
@@ -32,9 +35,36 @@ CLOSED_STATUSES = ("complete", "supplier_declined", "needs_human", "expired")
 
 MESSAGE_DIRECTIONS = ("inbound", "outbound")
 
+#: L5f: régimen de facturación del proveedor para todo el pedido (D1, D5).
+BILLING_REGIMES = ("facturado", "efectivo", "parcial")
+#: L5f: base del flete que pasó el proveedor (D4).
+FREIGHT_BASES = ("pedido", "viaje")
+
 
 class WhatsappConversation(TimestampMixin, Base):
     __tablename__ = "whatsapp_conversations"
+
+    # L5f: las condiciones del proveedor (régimen y flete) viven acá, por proveedor × pedido,
+    # con CHECK nombrados para que la migración y el SQL manual digan lo mismo.
+    __table_args__ = (
+        CheckConstraint(
+            "billing_regime IS NULL OR billing_regime IN ('facturado', 'efectivo', 'parcial')",
+            name="ck_whatsapp_conversations_billing_regime",
+        ),
+        CheckConstraint(
+            "documented_pct IS NULL OR (documented_pct >= 0 AND documented_pct <= 100)",
+            name="ck_whatsapp_conversations_documented_pct",
+        ),
+        CheckConstraint("freight_cost IS NULL OR freight_cost >= 0", name="ck_whatsapp_conversations_freight_cost"),
+        CheckConstraint(
+            "freight_basis IS NULL OR freight_basis IN ('pedido', 'viaje')",
+            name="ck_whatsapp_conversations_freight_basis",
+        ),
+        CheckConstraint(
+            "freight_free_over IS NULL OR freight_free_over >= 0",
+            name="ck_whatsapp_conversations_freight_free_over",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -124,6 +154,25 @@ class WhatsappConversation(TimestampMixin, Base):
         default=0,
         server_default="0",
     )
+
+    # -------------------------------------------------- condiciones (lab L5f)
+    #: facturado | efectivo | parcial. NULL = el proveedor no lo dijo (se repregunta).
+    billing_regime: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    #: Con ``parcial``: qué porcentaje factura, solo si el proveedor lo dijo (nunca se pide).
+    documented_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+
+    #: Flete a obra para todo el pedido (0 = incluido). NULL = sin dato.
+    freight_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+
+    #: pedido | viaje: si el costo es por todo el pedido o por cada viaje.
+    freight_basis: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    #: Umbral "flete sin cargo arriba de $ X", tal como lo dijo el proveedor.
+    freight_free_over: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+
+    #: Último fragmento literal del proveedor que respaldó las condiciones.
+    terms_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # -------------------------------------------------------------- relations
     batch = relationship("RFQBatch")

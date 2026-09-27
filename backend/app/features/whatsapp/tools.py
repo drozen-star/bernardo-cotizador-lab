@@ -6,8 +6,12 @@ Ninguna tiene efectos hacia afuera: todas escriben en la base. Los esquemas son 
 """
 
 RECORD_QUOTE = "record_quote"
+RECORD_TERMS = "record_terms"
 ASK_BUYER = "ask_buyer"
 SET_STATUS = "set_status"
+
+#: L5f: la evidencia es una línea literal y continua; más que esto es pegar partes.
+EVIDENCE_MAX_LENGTH = 300
 
 #: Estados que el modelo puede pedir con set_status. "expired" lo pone el sistema.
 STATUS_VALUES = ("complete", "supplier_declined", "needs_human")
@@ -24,8 +28,11 @@ TOOLS: list[dict] = [
             "Copiá los valores tal como los dio: no redondees, no conviertas monedas, no "
             "completes lo que no dijo (va en null). En una corrección, null = no lo dijo en "
             "este mensaje; se conserva lo registrado. rfq_id es el de la ficha del pedido. "
-            "evidence es el fragmento literal del mensaje del proveedor que respalda el "
-            "precio; si el fragmento no aparece en lo que escribió, el registro se rechaza."
+            "evidence es SOLO la línea del precio de ese ítem, literal y continua (sin '...', "
+            "sin unir partes), de 300 caracteres como máximo; si no aparece tal cual en lo que "
+            "escribió el proveedor, el registro se rechaza. Las condiciones comunes a todo el "
+            "pedido (régimen de facturación, flete, y también pago, plazo y validez cuando valen "
+            "para todo) no van acá: van con record_terms."
         ),
         "input_schema": {
             "type": "object",
@@ -64,7 +71,8 @@ TOOLS: list[dict] = [
                 "evidence": {
                     "type": "string",
                     "minLength": 3,
-                    "description": "Fragmento literal del mensaje del proveedor que respalda el precio.",
+                    "maxLength": EVIDENCE_MAX_LENGTH,
+                    "description": "La línea del precio de este ítem, literal y continua, tal como la escribió el proveedor.",
                 },
             },
             "required": [
@@ -76,6 +84,62 @@ TOOLS: list[dict] = [
                 "lead_time_days",
                 "payment_terms",
                 "validity",
+                "evidence",
+            ],
+        },
+    },
+    {
+        "name": RECORD_TERMS,
+        "description": (
+            "Registra las condiciones del proveedor para TODO el pedido, no por ítem: régimen de "
+            "facturación y flete a obra. Llamala una vez cuando el proveedor las diga y otra vez "
+            "solo si cambia algo. null = no lo dijo (se conserva lo registrado). No preguntes "
+            "porcentajes de facturación ni si se cumple un umbral de flete: registrá lo que dijo."
+        ),
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "billing_regime": {
+                    "type": ["string", "null"],
+                    "enum": ["facturado", "efectivo", "parcial", None],
+                    "description": "facturado = con factura A. efectivo = sin factura. parcial = factura una parte.",
+                },
+                "documented_pct": {
+                    "type": ["number", "null"],
+                    "description": "Solo si el proveedor dijo qué porcentaje factura. No lo pidas.",
+                },
+                "freight_included": {
+                    "type": ["boolean", "null"],
+                    "description": "true si el flete a obra está incluido siempre, false si no, null si no lo aclaró.",
+                },
+                "freight_cost": {
+                    "type": ["number", "null"],
+                    "description": "Costo del flete tal como lo dijo, en pesos.",
+                },
+                "freight_basis": {
+                    "type": ["string", "null"],
+                    "enum": ["pedido", "viaje", None],
+                    "description": "pedido = por todo el pedido. viaje = por cada viaje.",
+                },
+                "freight_free_over": {
+                    "type": ["number", "null"],
+                    "description": "Monto a partir del cual el flete es sin cargo, tal como lo dijo.",
+                },
+                "evidence": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": EVIDENCE_MAX_LENGTH,
+                    "description": "Fragmento literal y continuo del mensaje del proveedor: sin '...', sin unir partes.",
+                },
+            },
+            "required": [
+                "billing_regime",
+                "documented_pct",
+                "freight_included",
+                "freight_cost",
+                "freight_basis",
+                "freight_free_over",
                 "evidence",
             ],
         },

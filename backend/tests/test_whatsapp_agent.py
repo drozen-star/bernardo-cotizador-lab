@@ -199,9 +199,10 @@ def test_price_with_literal_evidence_creates_a_whatsapp_quote(db_session, world)
     assert quote.iva_included is True and quote.freight_included is True
     assert quote.lead_time is None and quote.payment_terms is None
     assert quote.submitted_at is not None
-    # L5a: sin plazo, forma de pago ni validez el ítem queda incompleto.
+    # L5a: sin plazo, forma de pago ni validez el ítem queda incompleto. L5f: y sin el régimen
+    # de facturación de la conversación (séptimo campo, se registra con record_terms).
     assert quote.completeness == "incomplete"
-    assert quote.missing_fields == ["lead_time", "payment_terms", "validity_date"]
+    assert quote.missing_fields == ["lead_time", "payment_terms", "validity_date", "billing_regime"]
 
     assert result.outbound.body == "Gracias. ¿Me pasás el plazo de entrega y el resto de los ítems?"
     assert result.outbound.tool_calls[0]["name"] == "record_quote"

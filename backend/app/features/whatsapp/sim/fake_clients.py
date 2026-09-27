@@ -33,6 +33,44 @@ _PAYMENT = re.compile(r"\b(contado(?:\s+(?:o|y)\s+transferencia)?|transferencia|
 _PAYMENT_DAYS = re.compile(r"pago[^.\n]*?(\d+\s*d[ií]as)", re.IGNORECASE)
 _VALIDITY = re.compile(r"validez[^.\n]*?(\d+\s*(?:horas?|d[ií]as?)|hasta el \d{1,2}/\d{1,2}/\d{4})", re.IGNORECASE)
 
+# L5f: condiciones para todo el pedido (régimen y flete) -> record_terms, con evidencia literal.
+_TERMS_SNIPPET = re.compile(r"((?:flete|factura|facturado|efectivo|con iva|\+ iva)[^.\n]{0,80})", re.IGNORECASE)
+_FREIGHT_COST = re.compile(r"flete[^.\n\d]{0,30}?(\d[\d.,]*\d)", re.IGNORECASE)
+_FREE_OVER = re.compile(r"(?:sin cargo|gratis|bonificado)[^.\n\d]{0,25}?(\d[\d.,]*\d)", re.IGNORECASE)
+
+
+def _terms(low: str) -> dict | None:
+    """Lo que el proveedor dijo del régimen y del flete, o None si no dijo nada de eso."""
+
+    if "factura a" in low or "facturado" in low or "con factura" in low:
+        regime = "facturado"
+    elif "efectivo" in low or "sin factura" in low:
+        regime = "efectivo"
+    elif "una parte" in low and "factur" in low:
+        regime = "parcial"
+    elif "con iva" in low or "+ iva" in low:
+        regime = "facturado"  # un precio con IVA discriminado es un precio facturado
+    else:
+        regime = None
+
+    included = True if "flete incluido" in low else (False if "flete aparte" in low else None)
+    cost_match = _FREIGHT_COST.search(low)
+    cost = _ar_number(cost_match.group(1)) if cost_match else None
+    over_match = _FREE_OVER.search(low)
+    free_over = _ar_number(over_match.group(1)) if over_match else None
+
+    if regime is None and included is None and cost is None and free_over is None:
+        return None
+
+    return {
+        "billing_regime": regime,
+        "documented_pct": None,
+        "freight_included": included,
+        "freight_cost": float(cost) if cost is not None else None,
+        "freight_basis": ("viaje" if "por viaje" in low else ("pedido" if cost is not None else None)),
+        "freight_free_over": float(free_over) if free_over is not None else None,
+    }
+
 
 def _lead_time_days(low: str) -> int | None:
     match = _LEAD_TIME.search(low) or _LEAD_TIME_ALT.search(low)
@@ -176,6 +214,11 @@ class _FakeAgentMessages:
         lead_time_days = _lead_time_days(low)
         payment_terms = _payment_terms(low)
         validity = _validity(low)
+        terms = _terms(low)
+        snippet = _TERMS_SNIPPET.search(text)
+
+        if terms is not None and snippet is not None:
+            blocks.append(tool_block(tools.RECORD_TERMS, {**terms, "evidence": snippet.group(1).strip()}, self._id()))
 
         for item, rfq_id in items.items():
             keyword = item.split()[0].lower()

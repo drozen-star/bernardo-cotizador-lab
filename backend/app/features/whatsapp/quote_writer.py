@@ -28,6 +28,7 @@ from app.core.mixins import utcnow
 from app.features.quote.model import SupplierQuote
 from app.features.rfq.model import RFQ
 from app.features.supplier.model import Supplier
+from app.features.whatsapp import terms_writer
 from app.features.whatsapp import tools
 from app.features.whatsapp.attachments import marks as attachment_marks
 from app.features.whatsapp.loop import ToolOutcome
@@ -161,6 +162,9 @@ class QuoteToolExecutor:
         if name == tools.RECORD_QUOTE:
             return self.record_quote(tool_input)
 
+        if name == tools.RECORD_TERMS:
+            return terms_writer.record_terms(self, tool_input)
+
         if name == tools.ASK_BUYER:
             return self.ask_buyer(tool_input)
 
@@ -186,10 +190,11 @@ class QuoteToolExecutor:
             )
 
         evidence = str(tool_input.get("evidence") or "").strip()
+        problem = terms_writer.check_evidence_shape(evidence)  # L5f: una línea, sin "...", hasta 300
 
-        if not evidence_is_literal(evidence, self.inbound_bodies):
+        if problem or not evidence_is_literal(evidence, self.inbound_bodies):
             return ToolOutcome(
-                content=(
+                content=problem or (
                     "Rechazado: evidence no aparece literalmente en ningún mensaje del proveedor. "
                     "Copiá el fragmento exacto que escribió, sin parafrasear. Si el proveedor no "
                     "dijo el precio, no lo registres: pedíselo."
@@ -265,7 +270,7 @@ class QuoteToolExecutor:
         attachment_marks.apply_from_attachment(
             quote, evidence, self.inbound_bodies, self.attachment_bodies, literal=evidence_is_literal
         )
-        quote.completeness, quote.missing_fields = assess(quote)
+        quote.completeness, quote.missing_fields = assess(quote, self.conversation)
         quote.submitted_at = utcnow()  # se pisa en cada actualización, a propósito
 
         self.db.flush()
@@ -290,7 +295,7 @@ class QuoteToolExecutor:
         pending = [
             f"{key} ({self.rfqs_by_id[key].item_name})" for key in sorted(self.rfqs_by_id) if key not in registered
         ]
-        missing = labels_for(assess(quote)[1])
+        missing = labels_for(assess(quote, self.conversation)[1])
 
         verb = "Registrado" if created else "Actualizado"
         price = f"{quote.unit_price} {quote.currency}" if quote.unit_price is not None else "sin precio"
@@ -351,7 +356,7 @@ class QuoteToolExecutor:
         gaps = []
 
         for quote in quotes:
-            _, missing = assess(quote)
+            _, missing = assess(quote, self.conversation)
 
             if missing:
                 rfq = self.rfqs_by_id.get(quote.rfq_id)

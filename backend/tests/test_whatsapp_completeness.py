@@ -58,9 +58,16 @@ def test_blank_payment_terms_is_missing():
 
 # ------------------------------------------------------- record_quote (update)
 def _first_turn(db_session, world, **fields):  # noqa: F811
+    """Primer turno con precio y, desde L5f, el régimen registrado con record_terms (facturado):
+    sin él la cotización queda incompleta por el séptimo campo (billing_regime)."""
+
     conversation, _ = _greet(db_session, world)
+    regime = tool_use("record_terms", {
+        "billing_regime": "facturado", "documented_pct": None, "freight_included": None, "freight_cost": None,
+        "freight_basis": None, "freight_free_over": None, "evidence": "con IVA",
+    }, id_="terms")
     handle_inbound(db_session, conversation.id, "Cemento 12900 con IVA, flete incluido, 3 días, contado, validez 48 horas", client=FakeClient([
-        reply(record(world.cemento.id, "cemento 12900 con iva", price=12900, **fields)),
+        reply(regime, record(world.cemento.id, "cemento 12900 con iva", price=12900, **fields)),
         reply(text("Lo tengo.")),
     ]))
 

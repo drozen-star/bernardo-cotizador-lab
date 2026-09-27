@@ -278,6 +278,7 @@ def _run_agent(
         quotes=_conversation_quotes(db, conversation.id),
         tag=settings.WHATSAPP_INPUT_TAG,
         buyer_questions=prompts.asked_buyer_questions(messages),
+        conversation=conversation,
     )
 
     executor = QuoteToolExecutor(

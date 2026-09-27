@@ -15,6 +15,7 @@ from app.features.quote.model import SupplierQuote
 from app.features.rfq.batch_model import RFQBatch
 from app.features.rfq.model import RFQ
 from app.features.supplier.model import Supplier
+from app.features.whatsapp.terms_writer import terms_summary
 
 BUENOS_AIRES = ZoneInfo("America/Argentina/Buenos_Aires")
 
@@ -37,8 +38,11 @@ YA CONSULTADO AL COMPRADOR (pendiente de respuesta). No vuelvas a consultar lo q
 REGLAS
 1. Respondé dudas técnicas solo con datos de la ficha. Si la respuesta no está en la ficha (medidas distintas, marcas no listadas, cambios de cantidad, horarios de descarga, acceso a obra, etc.), NO la inventes: llamá a ask_buyer y decile al proveedor que lo consultás y le confirmás.
 2. Si el proveedor ofrece una alternativa, solo la aceptás como opción a cotizar si coincide con las "alternativas aceptadas" de ese ítem. Si no, ask_buyer.
-3. Cada vez que el proveedor pase precios o condiciones, llamá a record_quote una vez por ítem, con el rfq_id de la ficha, copiando los valores tal como los dio: sin redondear, sin convertir monedas, sin completar lo que no dijo (eso va en null). evidence es el fragmento literal del mensaje del proveedor que respalda ese precio. Registrá como máximo 5 ítems por respuesta; si el proveedor pasó más, seguí en la próxima vuelta. Registrá antes de redactar el texto al proveedor. Lo que falte, repreguntalo.
+3. Cada vez que el proveedor pase precios o condiciones, llamá a record_quote una vez por ítem, con el rfq_id de la ficha, copiando los valores tal como los dio: sin redondear, sin convertir monedas, sin completar lo que no dijo (eso va en null). evidence es la línea del precio de ese ítem, literal y continua: sin "...", sin unir partes, hasta 300 caracteres. Registrá como máximo 5 ítems por respuesta; si el proveedor pasó más, seguí en la próxima vuelta. Registrá antes de redactar el texto al proveedor. Lo que falte, repreguntalo.
 4. Si el proveedor corrige un valor que ya figura como registrado, volvé a llamar a record_quote para ese ítem con el valor nuevo. No pidas de nuevo lo que ya está registrado.
+4b. Las condiciones que valen para todo el pedido (régimen de facturación, flete) se registran UNA vez con record_terms. No vuelvas a llamar record_quote de ítems ya registrados para cambiar algo que es común a todo el pedido. Registrá solo lo nuevo o lo que cambió en este mensaje. Si pago, plazo o validez valen para todo, mandá los record_quote de todos los ítems en un solo mensaje de herramientas.
+4c. Régimen: preguntá si factura con factura A o es en efectivo. No preguntes porcentajes: si el proveedor dice que factura una parte, registrá parcial, y el porcentaje solo si lo dijo.
+4d. Flete: pedí el costo del flete de todo el pedido a obra. Si lo da por viaje, registralo así (freight_basis viaje). Si dice "incluido arriba de $ X", registrá el umbral en freight_free_over y no le preguntes si se cumple.
 5. Nunca confirmes una compra, nunca aceptes un precio, nunca negocies, nunca compartas datos de pago ni datos personales. La decisión de compra es siempre de {buyer_company}.
 6. Cuando tengas precio y condiciones de todos los ítems que el proveedor puede cotizar, llamá a set_status con "complete". Si el proveedor dice que no trabaja estos materiales o no va a cotizar, "supplier_declined". Si pide hablar con una persona, se pone hostil o la conversación se sale del pedido, "needs_human".
 7. Si te preguntan si sos una persona, respondé con la verdad: sos un asistente automático que trabaja para {buyer_company}.
@@ -49,6 +53,7 @@ REGLAS
 ESTILO
 Español rioplatense, de vos, en primera persona. Registro de jefe de obra: directo, con números exactos (precio, cantidad, fecha, plazo) y sin adorno. Mensajes cortos, como en WhatsApp: una o dos oraciones, máximo una lista corta. Confirmá sin celebrar y pedí sin disculparte de más: "Lo tengo.", "Ya está registrado.", "No tengo eso, ¿me lo pasás?".
 Prohibido: "che", "dale", "genial", "buenísimo", "joya", diminutivos, muletillas, "claro que sí", "por supuesto", "entendido", emojis, signos de exclamación.
+Antes de una palabra que empieza con "i" o "hi" (no "hie"), "y" pasa a "e"; antes de "hie", va "y": "cal, arena y hierro", "cemento e hidrófugo".
 No vuelvas a presentarte: ya te presentaste en la apertura. Respondé como quien ya estaba ahí.
 No te contradigas: lo que derivaste al comprador con ask_buyer no lo afirmes ni lo niegues en el mismo mensaje; decí que está pendiente con el comprador.
 No repitas la lista completa salvo que te la pidan."""
@@ -120,13 +125,35 @@ def _flag_text(value: bool | None, yes: str, no: str) -> str:
     return yes if value else no
 
 
-def build_registered_block(quotes: list[SupplierQuote], rfqs_by_id: dict[int, RFQ]) -> str:
-    """Lo que ya se registró en ``supplier_quotes`` para esta conversación."""
+def _validity_text(quote: SupplierQuote) -> str:
+    if quote.validity_date is not None:
+        return f"{quote.validity_date:%d/%m/%Y}"
+
+    remarks = (quote.remarks or "").strip()
+
+    if remarks.startswith("Validez:"):
+        return remarks[len("Validez:"):].strip() or "sin dato"
+
+    return "sin dato"
+
+
+def build_terms_line(conversation) -> str:
+    """L5f: las condiciones del proveedor para todo el pedido (régimen y flete)."""
+
+    if conversation is None:
+        return "Condiciones del proveedor (todo el pedido): sin dato de régimen ni de flete."
+
+    return "Condiciones del proveedor (todo el pedido): " + terms_summary(conversation)
+
+
+def build_registered_block(quotes: list[SupplierQuote], rfqs_by_id: dict[int, RFQ], conversation=None) -> str:
+    """Lo que ya se registró: condiciones del proveedor y cada ``supplier_quotes`` de la conversación."""
+
+    lines = [build_terms_line(conversation)]
 
     if not quotes:
-        return "(nada todavía)"
-
-    lines = []
+        lines.append("Ítems: (nada todavía)")
+        return "\n".join(lines)
 
     for quote in sorted(quotes, key=lambda item: item.rfq_id):
         rfq = rfqs_by_id.get(quote.rfq_id)
@@ -140,6 +167,7 @@ def build_registered_block(quotes: list[SupplierQuote], rfqs_by_id: dict[int, RF
             f" | flete: {_flag_text(quote.freight_included, 'incluido', 'no incluido')}"
             f" | plazo: {lead}"
             f" | pago: {quote.payment_terms or 'sin dato'}"
+            f" | validez: {_validity_text(quote)}"
         )
 
     return "\n".join(lines)
@@ -189,6 +217,7 @@ def build_system_prompt(
     quotes: list[SupplierQuote],
     tag: str,
     buyer_questions: list[str] | None = None,
+    conversation=None,
 ) -> str:
     rfqs_by_id = {rfq.id: rfq for rfq in rfqs}
 
@@ -197,7 +226,7 @@ def build_system_prompt(
         supplier_name=supplier.name,
         batch_name=batch.name,
         sheet=build_batch_sheet(batch, rfqs, buyer_company),
-        registered=build_registered_block(quotes, rfqs_by_id),
+        registered=build_registered_block(quotes, rfqs_by_id, conversation),
         buyer_questions=build_buyer_questions_block(buyer_questions or []),
         tag=tag,
     )
@@ -242,8 +271,9 @@ def build_opening_reply(
         lines.append(f"Entrega en {where or 'obra'}{when}.")
 
     lines.append(
-        "Para cada ítem necesito precio unitario, si incluye IVA y flete, plazo de entrega, "
-        "forma de pago y validez de la oferta. Podés cotizar solo lo que tengas. "
+        "Para cada ítem necesito precio unitario, si incluye IVA, plazo de entrega, forma de pago "
+        "y validez de la oferta. Del pedido completo: si facturás con factura A o es en efectivo, "
+        "y el costo del flete a obra. Podés cotizar solo lo que tengas. "
         "Si algo de la lista no te cierra, preguntame."
     )
 
