@@ -22,38 +22,52 @@ starter, sin base de Render, sin frontend y sin migraciones ni seeds en el start
    de la base; va por SQL o por el dashboard de Supabase). Cualquier formato: se normaliza.
 3. Tener un batch abierto con ese proveedor invitado (L2: `POST /rfq-batches/import`).
 
-## 1. Variables de entorno en Render (todas `sync: false`, se cargan en el dashboard)
+## 1. Variables de entorno en Render
 
-### Del lab (L3/L4)
+Dos grupos, igual que en `render.yaml`. **`SECRET_KEY` fuerte y distinto de cualquier otro
+servicio: la API de la base queda pública en Render.**
+
+### 1a. A cargar a mano en el dashboard (`sync: false`)
 
 | Variable | Valor | Notas |
 | --- | --- | --- |
 | `DATABASE_URL` | `postgresql+psycopg://postgres.<ref>:<pass>@aws-0-sa-east-1.pooler.supabase.com:5432/postgres` | Session pooler (5432). `aws-0`, no `aws-1`. |
 | `DATABASE_URL_DIRECT` | misma URL | La usa Alembic; no hace falta si no se migra desde Render. |
-| `ANTHROPIC_API_KEY` | key de Anthropic | Nunca en el repo. |
-| `BERNARDO_MODEL` | `claude-sonnet-5` | Agente conversador. |
+| `SECRET_KEY` | secreto largo, único | JWT del dashboard. Con el default la app loguea error. |
+| `SCHEDULER_SECRET` | secreto largo | Habilita `POST /internal/scheduler/tick`. |
+| `ANTHROPIC_API_KEY` | key de Anthropic | Agente conversador. Nunca en el repo. |
+| `LLM_API_KEY` | key de Anthropic (o vacía) | Funciones de la base por la capa OpenAI-compat; vacía = fallbacks. |
 | `WHATSAPP_TOKEN` | token de Cloud API | Del System User de la app de Meta. |
 | `WHATSAPP_PHONE_NUMBER_ID` | id del número | El del número de Bernardo (compartido con el bot). |
-| `WA_GRAPH_VERSION` | `v21.0` (o la vigente) | Sin default en el código: si falta, no se envía. |
 | `LAB_SHARED_SECRET` | secreto largo | El bot lo manda en `X-Bernardo-Lab-Secret`. |
 | `LAB_ADMIN_TOKEN` | otro secreto largo | Para aprobar borradores. Distinto del anterior. |
-| `BERNARDO_WA_NUMBER` | `549...` | Link wa.me del mail de invitación (L2). |
+| `BACKEND_URL` | URL pública de Render | Se conoce después del deploy. |
+| `FRONTEND_URL` / `PUBLIC_FORM_URL` | URLs de los frontends (o la del backend si no hay) | El link del formulario en los mails sale de `PUBLIC_FORM_URL`. |
+| `ALLOWED_ORIGINS` | `*` al principio, después los orígenes exactos | Vacío rompe CORS. |
 
-### De la base (exigidas o que hay que fijar en producción)
+### 1b. Fijas en `render.yaml` (con su valor escrito)
 
-| Variable | Valor sugerido | Por qué |
+| Variable | Valor | Por qué |
 | --- | --- | --- |
 | `ENV` | `production` | Activa los warnings de configuración. |
-| `SECRET_KEY` | secreto largo | JWT del dashboard. Con el default la app loguea error. |
-| `ALLOWED_ORIGINS` | `*` al principio, después los orígenes de Vercel | Vacío rompe CORS. |
-| `BACKEND_URL` / `FRONTEND_URL` / `PUBLIC_FORM_URL` | URLs públicas | El link del formulario en los mails sale de `PUBLIC_FORM_URL`. |
-| `EMAIL_PROVIDER` / `EMAIL_API_KEY` / `MAIL_FROM` | `resend` + key, o `console` | Render bloquea SMTP; `console` solo loguea. |
-| `STORAGE_BACKEND` | `s3` (+ `S3_*`) o `local` | Sin disco persistente en Render; `local` pierde adjuntos al redeploy (solo warning). |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | vacío o Anthropic compat | Funciones de la base; sin key usan fallbacks determinísticos. |
-| `SCHEDULER_ENABLED` / `SCHEDULER_SECRET` | `true` / secreto | Recordatorios de la base. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` | Default de la base. |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` / `DB_POOL_RECYCLE_SECONDS` | `5` / `5` / `300` | Pool para el pooler. |
+| `BERNARDO_MODEL` | `claude-sonnet-5` | Agente conversador. |
+| `WHATSAPP_MAX_TOKENS` / `WHATSAPP_MAX_TOOL_ROUNDS` | `4096` / `5` | Defaults del slice, explícitos. |
+| `GRAPH_API_VERSION` | `v23.0` (el mismo que el bot; verificar si el bot lo tiene cargado en Render) | Sin default en el código: si falta, no se envía. |
+| `WHATSAPP_SEND_TIMEOUT_SECONDS` / `WHATSAPP_WINDOW_HOURS` | `10` / `24` | Timeout de envío y ventana de Meta. |
+| `LLM_BASE_URL` / `LLM_MODEL` / `LLM_ENABLED` | `https://api.anthropic.com/v1/` / `claude-haiku-4-5-20251001` / `true` | Spec sección 7. |
+| `EMAIL_PROVIDER` | `console` | En L4 no sale mail real. |
+| `STORAGE_BACKEND` | `local` | Sin adjuntos en L4; solo warning en producción. |
+| `SCHEDULER_ENABLED` / `SCHEDULER_INTERVAL_MINUTES` / `AUTO_SEND_FOLLOWUPS` | `true` / `15` / `false` | Recordatorios de la base con aprobación. |
 | `DEFAULT_PROCUREMENT_TYPE` | `goods` | Materiales, no servicios. |
 | `BASE_CURRENCY` / `DEFAULT_GST_RATE` | `ARS` / `0` | Argentina; el IVA va por flag en `supplier_quotes`. |
-| `DEMO_MODE_ENABLED` | `false` | No hace falta demo pública en el lab. |
+| `DEMO_MODE_ENABLED` | `false` | Sin demo pública en el lab. |
+
+Fuera del yaml en L4 (la base no las necesita hoy): `EMAIL_API_KEY` y `MAIL_FROM` (mail en
+console), `S3_*` y `MAX_UPLOAD_MB` (storage local), `CAPTCHA_*`, `FX_RATES_JSON`,
+`DEFAULT_SCORING_WEIGHTS_JSON`, `BERNARDO_WA_NUMBER` (solo va en el mail de invitación de L2,
+que en L4 no se manda). Se agregan cuando el mail pase a real.
 
 Notas: `backend/.python-version` fija Python 3.13 (Render lo lee). El start command corre
 `uvicorn app.main:app`; el arranque hace `create_all` (no altera tablas existentes) y prende

@@ -34,7 +34,7 @@ def _config() -> tuple[str, str, str]:
         for name, value in (
             ("WHATSAPP_TOKEN", settings.WHATSAPP_TOKEN),
             ("WHATSAPP_PHONE_NUMBER_ID", settings.WHATSAPP_PHONE_NUMBER_ID),
-            ("WA_GRAPH_VERSION", settings.WA_GRAPH_VERSION),
+            ("GRAPH_API_VERSION", settings.GRAPH_API_VERSION),
         )
         if not value
     ]
@@ -42,7 +42,7 @@ def _config() -> tuple[str, str, str]:
     if missing:
         raise SenderError("whatsapp_not_configured", "faltan " + ", ".join(missing))
 
-    return settings.WHATSAPP_TOKEN, settings.WHATSAPP_PHONE_NUMBER_ID, settings.WA_GRAPH_VERSION
+    return settings.WHATSAPP_TOKEN, settings.WHATSAPP_PHONE_NUMBER_ID, settings.GRAPH_API_VERSION
 
 
 def messages_url(version: str, phone_number_id: str) -> str:

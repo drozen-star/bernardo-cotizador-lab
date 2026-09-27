@@ -135,7 +135,7 @@ def test_approve_requires_admin_token(client, conversation):
 def _configured(monkeypatch):
     monkeypatch.setattr(whatsapp_settings, "WHATSAPP_TOKEN", "EAAB-token")
     monkeypatch.setattr(whatsapp_settings, "WHATSAPP_PHONE_NUMBER_ID", "123456789")
-    monkeypatch.setattr(whatsapp_settings, "WA_GRAPH_VERSION", "v21.0")
+    monkeypatch.setattr(whatsapp_settings, "GRAPH_API_VERSION", "v23.0")
 
 
 def test_sender_posts_to_graph_with_bearer_and_returns_the_message_id(monkeypatch):
@@ -151,7 +151,7 @@ def test_sender_posts_to_graph_with_bearer_and_returns_the_message_id(monkeypatc
     client = httpx.Client(transport=httpx.MockTransport(handler))
 
     assert sender.send_text("5491155551234", "Hola, Raúl.", client=client) == "wamid.HBg"
-    assert seen["url"] == "https://graph.facebook.com/v21.0/123456789/messages"
+    assert seen["url"] == "https://graph.facebook.com/v23.0/123456789/messages"
     assert seen["auth"] == "Bearer EAAB-token"
     assert seen["json"] == {
         "messaging_product": "whatsapp",
@@ -187,10 +187,10 @@ def test_sender_raises_when_graph_is_unreachable(monkeypatch):
 def test_sender_refuses_without_configuration(monkeypatch):
     monkeypatch.setattr(whatsapp_settings, "WHATSAPP_TOKEN", "")
     monkeypatch.setattr(whatsapp_settings, "WHATSAPP_PHONE_NUMBER_ID", "")
-    monkeypatch.setattr(whatsapp_settings, "WA_GRAPH_VERSION", "")
+    monkeypatch.setattr(whatsapp_settings, "GRAPH_API_VERSION", "")
 
     with pytest.raises(sender.SenderError) as excinfo:
         sender.send_text("5491155551234", "x", client=httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail("no debe llamar"))))
 
     assert excinfo.value.code == "whatsapp_not_configured"
-    assert "WA_GRAPH_VERSION" in excinfo.value.detail
+    assert "GRAPH_API_VERSION" in excinfo.value.detail

@@ -2,12 +2,16 @@
 # Render Blueprint — Laboratorio Bernardo Cotizador (L4)
 # =============================================================================
 # Solo el web service del backend. Sin base de Render (la base es Supabase), sin
-# frontends (no hacen falta para el lab de WhatsApp) y sin migraciones ni seeds en
-# el start command: la migración se aplica a mano antes del deploy
-# (docs/CHECKLIST-DEPLOY-L4.md).
+# frontends y sin migraciones ni seeds en el start command: la migración se aplica
+# a mano antes del deploy (docs/CHECKLIST-DEPLOY-L4.md).
 #
-# Plan starter (USD 7): sin spin-down, 512 MB. Todas las variables se cargan en el
-# dashboard (sync: false): ninguna vive en el repo.
+# Plan starter (USD 7): sin spin-down, 512 MB.
+#
+# Dos grupos de variables:
+#   * sync: false  -> se cargan a mano en el dashboard: secretos y URLs que se
+#                     conocen recién después del deploy.
+#   * value: ...   -> fijas acá, con su valor escrito.
+# Lo que la base no necesita en L4 (mail real, S3, captcha, FX) no figura.
 # =============================================================================
 
 services:
@@ -36,107 +40,108 @@ services:
     autoDeploy: false
 
     envVars:
-      # ---------------------------------------------------------------- runtime
-      - key: ENV
-        sync: false
-
-      # --------------------------------------------------------------- database
+      # =========================================================================
+      # A CARGAR A MANO (sync: false)
+      # =========================================================================
+      # ---- secretos -----------------------------------------------------------
       # Session pooler de Supabase (aws-0-sa-east-1, puerto 5432), driver psycopg 3.
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_URL_DIRECT
         sync: false
-      - key: DB_POOL_SIZE
-        sync: false
-      - key: DB_MAX_OVERFLOW
-        sync: false
-      - key: DB_POOL_RECYCLE_SECONDS
-        sync: false
-
-      # ------------------------------------------------------------------- auth
+      # Fuerte y distinto de cualquier otro servicio: la API de la base queda pública.
       - key: SECRET_KEY
         sync: false
-      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+      - key: SCHEDULER_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Key para la capa OpenAI-compat de Anthropic que usan las funciones de la base.
+      # Vacía = fallbacks determinísticos (sin LLM) en esas funciones.
+      - key: LLM_API_KEY
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: LAB_SHARED_SECRET
+        sync: false
+      - key: LAB_ADMIN_TOKEN
         sync: false
 
-      # ------------------------------------------------------------------- URLs
+      # ---- URLs que se conocen después del deploy ----------------------------
       - key: BACKEND_URL
         sync: false
       - key: FRONTEND_URL
         sync: false
       - key: PUBLIC_FORM_URL
         sync: false
+      # Orígenes exactos separados por coma. Vacío rompe CORS; "*" funciona con warning.
       - key: ALLOWED_ORIGINS
         sync: false
 
-      # ------------------------------------------------- agente de WhatsApp (L3)
-      - key: ANTHROPIC_API_KEY
-        sync: false
+      # =========================================================================
+      # FIJAS EN EL YAML
+      # =========================================================================
+      # ---- runtime ------------------------------------------------------------
+      - key: ENV
+        value: production
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+
+      # ---- base de datos (pool tuneado para pooler) ---------------------------
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "5"
+      - key: DB_POOL_RECYCLE_SECONDS
+        value: "300"
+
+      # ---- agente de WhatsApp (L3) -------------------------------------------
       - key: BERNARDO_MODEL
-        sync: false
-      - key: BERNARDO_WA_NUMBER
-        sync: false
+        value: claude-sonnet-5
+      - key: WHATSAPP_MAX_TOKENS
+        value: "4096"
+      - key: WHATSAPP_MAX_TOOL_ROUNDS
+        value: "5"
 
-      # ------------------------------------------------- bot -> lab y envío (L4)
-      - key: LAB_SHARED_SECRET
-        sync: false
-      - key: LAB_ADMIN_TOKEN
-        sync: false
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: WA_GRAPH_VERSION
-        sync: false
+      # ---- envío por Cloud API (L4) ------------------------------------------
+      # Misma versión que el bot de producción (bot/wa/cloudapi.js).
+      - key: GRAPH_API_VERSION
+        value: v23.0
+      - key: WHATSAPP_SEND_TIMEOUT_SECONDS
+        value: "10"
+      - key: WHATSAPP_WINDOW_HOURS
+        value: "24"
 
-      # ------------------------------------------------- funciones LLM de la base
+      # ---- funciones LLM de la base (spec sección 7: capa OpenAI-compat) --------
       - key: LLM_BASE_URL
-        sync: false
-      - key: LLM_API_KEY
-        sync: false
+        value: https://api.anthropic.com/v1/
       - key: LLM_MODEL
-        sync: false
+        value: claude-haiku-4-5-20251001
       - key: LLM_ENABLED
-        sync: false
+        value: "true"
 
-      # ------------------------------------------------------------------ email
+      # ---- mail y archivos: en L4 no sale mail real ni hay adjuntos ------------
       - key: EMAIL_PROVIDER
-        sync: false
-      - key: EMAIL_API_KEY
-        sync: false
-      - key: MAIL_FROM
-        sync: false
-
-      # ---------------------------------------------------------------- storage
+        value: console
       - key: STORAGE_BACKEND
-        sync: false
-      - key: S3_ENDPOINT_URL
-        sync: false
-      - key: S3_BUCKET
-        sync: false
-      - key: S3_REGION
-        sync: false
-      - key: S3_ACCESS_KEY_ID
-        sync: false
-      - key: S3_SECRET_ACCESS_KEY
-        sync: false
-      - key: S3_PUBLIC_BASE_URL
-        sync: false
+        value: local
 
-      # ------------------------------------------------------------- scheduler
+      # ---- scheduler de la base ----------------------------------------------
       - key: SCHEDULER_ENABLED
-        sync: false
-      - key: SCHEDULER_SECRET
-        sync: false
+        value: "true"
+      - key: SCHEDULER_INTERVAL_MINUTES
+        value: "15"
       - key: AUTO_SEND_FOLLOWUPS
-        sync: false
+        value: "false"
 
-      # ----------------------------------------------------- compras / moneda
+      # ---- compras / moneda --------------------------------------------------
       - key: DEFAULT_PROCUREMENT_TYPE
-        sync: false
+        value: goods
       - key: BASE_CURRENCY
-        sync: false
+        value: ARS
       - key: DEFAULT_GST_RATE
-        sync: false
+        value: "0"
       - key: DEMO_MODE_ENABLED
-        sync: false
+        value: "false"
