@@ -35,6 +35,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.rate_limit import describe_configuration as describe_spam
 from app.core.storage import get_storage
 from app.features.auth.router import router as auth_router
+from app.features.batch_comparison.router import router as batch_comparison_router  # lab L5d
 from app.features.chat.router import router as chat_router
 from app.features.comparison.router import router as comparison_router
 from app.features.dashboard.router import router as dashboard_router
@@ -192,6 +193,7 @@ app.include_router(public_form_router)
 
 # ---- lab L4: bot de WhatsApp (secreto compartido) y aprobación (token admin) --
 app.include_router(whatsapp_router)
+app.include_router(batch_comparison_router)  # lab L5d
 
 # ---- public (no credential at all, read-only) -------------------------------
 # The demo is deliberately mounted here, apart from the authenticated routers: it
