@@ -23,6 +23,7 @@ FLAG_PROMPT_LEAK = "prompt_leak"
 FLAG_EMPTY_REPLY = "empty_reply"
 FLAG_EMOJI_REMOVED = "emoji_removed"
 FLAG_EXCLAMATION_REMOVED = "exclamation_removed"
+FLAG_SLANG_REMOVED = "slang_removed"
 FLAG_REPLY_TRUNCATED = "reply_truncated"
 FLAG_INPUT_TRUNCATED = "input_truncated"
 FLAG_INPUT_TAG_ESCAPED = "input_tag_escaped"
@@ -61,6 +62,24 @@ _PROMPT_LEAK = re.compile(
 )
 
 _EXCLAMATION = re.compile(r"[¡!]")
+
+#: "Che" / "Dale" como interjección al inicio de una oración, seguidas de coma o espacio y
+#: de una letra. Con límite de palabra: "chequeé" y "dale que va" a mitad de frase quedan.
+_SLANG_START = re.compile(
+    r"(?P<lead>^\s*|(?<=[.?…])\s+)(?:che|dale)\b\s*,?\s*(?P<next>[^\W\d_])",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_slang(text: str) -> tuple[str, bool]:
+    """Quita la interjección y capitaliza lo que sigue. Devuelve (texto, hubo_cambio)."""
+
+    def replace(match: re.Match[str]) -> str:
+        return f"{match.group('lead')}{match.group('next').upper()}"
+
+    cleaned, count = _SLANG_START.subn(replace, text)
+
+    return cleaned, count > 0
 
 #: Caracteres que acompañan emojis y no tienen categoría "So".
 _EMOJI_JOINERS = {"‍", "️", "︎"}
@@ -150,6 +169,13 @@ def review_outbound(text: str, *, max_chars: int, safe_reply: str) -> OutboundRe
     if _EXCLAMATION.search(text):
         flags.append(FLAG_EXCLAMATION_REMOVED)
         text = _EXCLAMATION.sub("", text)
+
+    # Voz (L5a): "Che, ..." / "Dale, ..." al inicio de oración. Después de los frenos
+    # bloqueantes a propósito: "Dale, confirmo la compra" ya se bloqueó arriba.
+    text, slang_removed = _strip_slang(text)
+
+    if slang_removed:
+        flags.append(FLAG_SLANG_REMOVED)
 
     # Los reemplazos pueden dejar espacios dobles o espacios antes de un punto.
     text = re.sub(r"[ \t]{2,}", " ", text)

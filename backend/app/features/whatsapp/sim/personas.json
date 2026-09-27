@@ -29,7 +29,7 @@
       "Arena gruesa": {"unit_price": 46500, "currency": "ARS", "iva_included": false, "freight_included": null, "lead_time_days": null},
       "Hierro ADN 420 8 mm": null
     },
-    "expected": {"status": ["complete", "needs_human"], "ask_buyer": true},
+    "expected": {"status": ["complete", "needs_human", "open"], "ask_buyer": true},
     "offline_turns": [
       "Antes de pasarte precio: el ladrillo es para muro portante o de cerramiento? Y aceptan CPC40 en vez de CPN40?",
       "Otra: el hierro lo quieren cortado y doblado? Hay hidrogrúa en la obra para descargar?",
@@ -49,7 +49,7 @@
       "Arena gruesa": {"unit_price": 45000, "currency": "ARS", "iva_included": true, "freight_included": false, "lead_time_days": null},
       "Hierro ADN 420 8 mm": null
     },
-    "expected": {"status": ["complete", "needs_human"], "ask_buyer": true},
+    "expected": {"status": ["complete", "needs_human", "open"], "ask_buyer": true},
     "offline_turns": [
       "Ladrillo 18x19x33 no tengo, tengo 12x19x33 portante, te sirve? Hierro de 8 tampoco, tengo de 10, va?",
       "Mientras tanto: cemento 12.500 con IVA la bolsa, cal 7.600 con IVA la bolsa, arena 45.000 con IVA el m3. Flete aparte, lo cotizo según zona.",

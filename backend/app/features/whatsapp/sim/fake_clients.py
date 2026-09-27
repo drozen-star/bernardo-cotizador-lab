@@ -25,6 +25,38 @@ _USAGE = NS(input_tokens=0, output_tokens=0)
 _SHEET_ROW = re.compile(r"- rfq_id (\d+) \| ([^|]+) \|")
 _TAG = re.compile(r"</?\s*[a-z_]+\s*>", re.IGNORECASE)
 
+# Condiciones comerciales en el mensaje del proveedor (L5a: sin ellas el ítem queda incompleto y
+# set_status complete se rechaza). Solo se toma lo que está escrito; si no está, null.
+_LEAD_TIME = re.compile(r"(?:entrega|plazo)[^.\n]*?(\d+)\s*(horas?|d[ií]as?)", re.IGNORECASE)
+_LEAD_TIME_ALT = re.compile(r"(\d+)\s*(horas?|d[ií]as?)\s+(?:de entrega|h[aá]biles)", re.IGNORECASE)
+_PAYMENT = re.compile(r"\b(contado(?:\s+(?:o|y)\s+transferencia)?|transferencia|cheque)\b", re.IGNORECASE)
+_PAYMENT_DAYS = re.compile(r"pago[^.\n]*?(\d+\s*d[ií]as)", re.IGNORECASE)
+_VALIDITY = re.compile(r"validez[^.\n]*?(\d+\s*(?:horas?|d[ií]as?)|hasta el \d{1,2}/\d{1,2}/\d{4})", re.IGNORECASE)
+
+
+def _lead_time_days(low: str) -> int | None:
+    match = _LEAD_TIME.search(low) or _LEAD_TIME_ALT.search(low)
+
+    if not match:
+        return None
+
+    amount = int(match.group(1))
+
+    # Horas -> días redondeando hacia arriba (72 h = 3 días, 48 h = 2 días, 30 h = 2 días).
+    return -(-amount // 24) if match.group(2).lower().startswith("h") else amount
+
+
+def _payment_terms(low: str) -> str | None:
+    match = _PAYMENT.search(low) or _PAYMENT_DAYS.search(low)
+
+    return match.group(1) if match else None
+
+
+def _validity(low: str) -> str | None:
+    match = _VALIDITY.search(low)
+
+    return match.group(1) if match else None
+
 
 def text_block(value: str) -> NS:
     return NS(type="text", text=value)
@@ -141,6 +173,9 @@ class _FakeAgentMessages:
 
         iva = True if "con iva" in low else (False if ("+ iva" in low or "sin iva" in low) else None)
         freight = True if "flete incluido" in low else (False if "flete aparte" in low else None)
+        lead_time_days = _lead_time_days(low)
+        payment_terms = _payment_terms(low)
+        validity = _validity(low)
 
         for item, rfq_id in items.items():
             keyword = item.split()[0].lower()
@@ -165,9 +200,9 @@ class _FakeAgentMessages:
                         "currency": "ARS",
                         "iva_included": iva,
                         "freight_included": freight,
-                        "lead_time_days": None,
-                        "payment_terms": None,
-                        "validity": None,
+                        "lead_time_days": lead_time_days,
+                        "payment_terms": payment_terms,
+                        "validity": validity,
                         "evidence": match.group(0),
                     },
                     self._id(),

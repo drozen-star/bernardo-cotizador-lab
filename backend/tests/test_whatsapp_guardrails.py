@@ -111,6 +111,46 @@ def test_outbound_truncates_long_replies():
     assert g.FLAG_REPLY_TRUNCATED in review.flags
 
 
+# --------------------------------------------------------------- voz (L5a)
+def test_che_at_sentence_start_is_removed_and_flagged():
+    review = _out("Che, te paso el precio del cemento.")
+
+    assert not review.blocked
+    assert review.text == "Te paso el precio del cemento."
+    assert g.FLAG_SLANG_REMOVED in review.flags
+
+
+def test_dale_at_sentence_start_is_removed_also_mid_text():
+    review = _out("Anotado el cemento. Dale, ahora pasame la cal.")
+
+    assert review.text == "Anotado el cemento. Ahora pasame la cal."
+    assert g.FLAG_SLANG_REMOVED in review.flags
+
+
+def test_chequee_and_mid_sentence_dale_stay_intact():
+    text = "Ya chequeé el precio; si te parece dale que seguimos."
+    review = _out(text)
+
+    assert review.text == text
+    assert g.FLAG_SLANG_REMOVED not in review.flags
+
+
+def test_slang_runs_after_the_blocking_checks():
+    review = _out("Dale, confirmo la compra y te transfiero la seña.")
+
+    assert review.blocked
+    assert review.text == SAFE
+    assert g.FLAG_PURCHASE_COMMITMENT in review.flags
+    assert g.FLAG_SLANG_REMOVED not in review.flags
+
+
+def test_slang_after_exclamation_cleanup():
+    review = _out("¡Dale! Te paso los datos.")
+
+    assert review.text == "Te paso los datos."
+    assert g.FLAG_EXCLAMATION_REMOVED in review.flags and g.FLAG_SLANG_REMOVED in review.flags
+
+
 def test_normal_reply_passes_untouched():
     text = "Gracias. ¿El flete a Gorriti 4800 está incluido en el precio?"
     review = _out(text)

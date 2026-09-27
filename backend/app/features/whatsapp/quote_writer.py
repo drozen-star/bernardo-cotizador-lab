@@ -31,6 +31,9 @@ from app.features.supplier.model import Supplier
 from app.features.whatsapp import tools
 from app.features.whatsapp.loop import ToolOutcome
 from app.features.whatsapp.model import WhatsappConversation
+from app.features.whatsapp.quote_completeness import VALIDITY_PREFIX
+from app.features.whatsapp.quote_completeness import assess
+from app.features.whatsapp.quote_completeness import labels_for
 
 _DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 
@@ -229,22 +232,34 @@ class QuoteToolExecutor:
             )
             self.db.add(quote)
 
+        # Semántica L5a: en una corrección, null = "no lo dijo en este mensaje" y se conserva
+        # lo registrado. En la creación, null queda null.
+        def keep(new, old):
+            return old if (not created and new is None) else new
+
         currency = tool_input.get("currency")
         lead_time = tool_input.get("lead_time_days")
+        lead_time = int(lead_time) if isinstance(lead_time, int) and not isinstance(lead_time, bool) else None
         payment_terms = tool_input.get("payment_terms")
+        payment_terms = str(payment_terms)[:255] if payment_terms and str(payment_terms).strip() else None
         validity = tool_input.get("validity")
 
-        quote.unit_price = unit_price
+        quote.unit_price = keep(unit_price, quote.unit_price)
         quote.currency = str(currency).upper() if currency else (quote.currency or rfq.currency)
-        quote.iva_included = tool_input.get("iva_included")
-        quote.freight_included = tool_input.get("freight_included")
-        quote.lead_time = int(lead_time) if isinstance(lead_time, int) and not isinstance(lead_time, bool) else None
-        quote.payment_terms = str(payment_terms)[:255] if payment_terms else None
-        quote.validity_date = _parse_validity(validity)
-        quote.remarks = f"Validez: {validity}"[:2000] if validity and quote.validity_date is None else None
+        quote.iva_included = keep(tool_input.get("iva_included"), quote.iva_included)
+        quote.freight_included = keep(tool_input.get("freight_included"), quote.freight_included)
+        quote.lead_time = keep(lead_time, quote.lead_time)
+        quote.payment_terms = keep(payment_terms, quote.payment_terms)
+
+        if validity:
+            quote.validity_date = _parse_validity(validity)
+            quote.remarks = f"{VALIDITY_PREFIX} {validity}"[:2000] if quote.validity_date is None else None
+        elif created:
+            quote.validity_date = None
+            quote.remarks = None
+
         quote.unparsed_notes = evidence[:4000]
-        quote.completeness = "complete" if unit_price is not None else "incomplete"
-        quote.missing_fields = [] if unit_price is not None else ["unit_price"]
+        quote.completeness, quote.missing_fields = assess(quote)
         quote.submitted_at = utcnow()  # se pisa en cada actualización, a propósito
 
         self.db.flush()
@@ -269,18 +284,7 @@ class QuoteToolExecutor:
         pending = [
             f"{key} ({self.rfqs_by_id[key].item_name})" for key in sorted(self.rfqs_by_id) if key not in registered
         ]
-        missing = [
-            label
-            for label, value in (
-                ("precio", quote.unit_price),
-                ("IVA", quote.iva_included),
-                ("flete", quote.freight_included),
-                ("plazo", quote.lead_time),
-                ("forma de pago", quote.payment_terms),
-                ("validez", quote.validity_date or quote.remarks),
-            )
-            if value is None
-        ]
+        missing = labels_for(assess(quote)[1])
 
         verb = "Registrado" if created else "Actualizado"
         price = f"{quote.unit_price} {quote.currency}" if quote.unit_price is not None else "sin precio"
@@ -315,7 +319,46 @@ class QuoteToolExecutor:
                 ok=False,
             )
 
+        if status == "complete":
+            blocker = self._incomplete_summary()
+
+            if blocker:
+                return ToolOutcome(content=blocker, ok=False)
+
         return ToolOutcome(content=f"Estado pedido: {status}.", status=status, reason=reason or status)
+
+    def _incomplete_summary(self) -> str | None:
+        """Por qué no se puede cerrar en complete, o None si está todo."""
+
+        quotes = self.db.scalars(
+            select(SupplierQuote)
+            .where(SupplierQuote.conversation_id == self.conversation.id)
+            .order_by(SupplierQuote.rfq_id)
+        ).all()
+
+        if not quotes:
+            return (
+                "Rechazado: no hay ninguna cotización registrada en esta conversación. Registrá los precios "
+                "con record_quote antes de cerrar, o usá supplier_declined si el proveedor no cotiza."
+            )
+
+        gaps = []
+
+        for quote in quotes:
+            _, missing = assess(quote)
+
+            if missing:
+                rfq = self.rfqs_by_id.get(quote.rfq_id)
+                item = rfq.item_name if rfq else f"rfq {quote.rfq_id}"
+                gaps.append(f"rfq_id {quote.rfq_id} ({item}): falta {', '.join(labels_for(missing))}")
+
+        if not gaps:
+            return None
+
+        return (
+            "Rechazado: hay cotizaciones incompletas. " + "; ".join(gaps) + ". "
+            "Pedíselos al proveedor, o usá needs_human si no los va a dar."
+        )
 
 
 def close_conversation(conversation: WhatsappConversation, status: str, reason: str, *, now: datetime | None = None) -> None:

@@ -22,7 +22,8 @@ TOOLS: list[dict] = [
             "pedido. Llamala una vez por ítem cada vez que el proveedor pase un precio o una "
             "condición, aunque sea parcial, y también cuando corrija un valor ya registrado. "
             "Copiá los valores tal como los dio: no redondees, no conviertas monedas, no "
-            "completes lo que no dijo (va en null). rfq_id es el de la ficha del pedido. "
+            "completes lo que no dijo (va en null). En una corrección, null = no lo dijo en "
+            "este mensaje; se conserva lo registrado. rfq_id es el de la ficha del pedido. "
             "evidence es el fragmento literal del mensaje del proveedor que respalda el "
             "precio; si el fragmento no aparece en lo que escribió, el registro se rechaza."
         ),

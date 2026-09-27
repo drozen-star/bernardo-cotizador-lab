@@ -159,16 +159,18 @@ def test_set_status_with_text_in_the_last_round_is_kept(db_session, world, monke
     conversation, _ = _greet(db_session, world)
     fake = FakeClient([
         *[reply(tool_use("ask_buyer", {"question": f"pregunta {i}"}, id_=f"t{i}")) for i in range(4)],
+        # L5a: complete exige cotizaciones completas; para probar el cierre en la última
+        # vuelta alcanza con supplier_declined, que cierra igual.
         reply(
-            text("Todo registrado, gracias. Constructora Palermo lo revisa y te escribimos."),
-            tool_use("set_status", {"status": "complete", "reason": "todo cotizado"}, id_="t5"),
+            text("Lo tengo. Constructora Palermo lo revisa y te escribimos."),
+            tool_use("set_status", {"status": "supplier_declined", "reason": "no cotiza el rubro"}, id_="t5"),
         ),
     ])
 
     result = handle_inbound(db_session, conversation.id, "eso es todo", client=fake)
 
-    assert conversation.status == "complete"
-    assert result.outbound.body == "Todo registrado, gracias. Constructora Palermo lo revisa y te escribimos."
+    assert conversation.status == "supplier_declined"
+    assert result.outbound.body == "Lo tengo. Constructora Palermo lo revisa y te escribimos."
     assert "tool_rounds_exhausted" not in result.outbound.guardrail_flags
     assert FLAG_TECHNICAL_ERROR not in result.outbound.guardrail_flags
     assert conversation.model_calls == 5
