@@ -16,6 +16,8 @@ import unicodedata
 from dataclasses import dataclass
 from dataclasses import field
 
+from app.features.whatsapp.voice_fixes import fix_conjunctions
+
 # ------------------------------------------------------------------ flags
 FLAG_PURCHASE_COMMITMENT = "purchase_commitment"
 FLAG_PAYMENT_DATA = "payment_data"
@@ -27,6 +29,8 @@ FLAG_SLANG_REMOVED = "slang_removed"
 FLAG_REPLY_TRUNCATED = "reply_truncated"
 FLAG_INPUT_TRUNCATED = "input_truncated"
 FLAG_INPUT_TAG_ESCAPED = "input_tag_escaped"
+#: L5f: concordancia "y" / "e" corregida ("arena e hilo", "arena y hierro"). No bloquea.
+FLAG_CONJUNCTION_FIXED = "conjunction_fixed"
 
 BLOCKING_FLAGS = (FLAG_PURCHASE_COMMITMENT, FLAG_PAYMENT_DATA, FLAG_PROMPT_LEAK, FLAG_EMPTY_REPLY)
 
@@ -176,6 +180,12 @@ def review_outbound(text: str, *, max_chars: int, safe_reply: str) -> OutboundRe
 
     if slang_removed:
         flags.append(FLAG_SLANG_REMOVED)
+
+    # Voz (L5f): "e hierro" -> "y hierro", "y hilo" -> "e hilo". Corrección, no bloqueo.
+    text, conjunction_fixed = fix_conjunctions(text)
+
+    if conjunction_fixed:
+        flags.append(FLAG_CONJUNCTION_FIXED)
 
     # Los reemplazos pueden dejar espacios dobles o espacios antes de un punto.
     text = re.sub(r"[ \t]{2,}", " ", text)

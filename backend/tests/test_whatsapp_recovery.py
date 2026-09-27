@@ -36,6 +36,10 @@ def _three_records(world):  # noqa: F811 - fixture object
 
 
 def test_max_tokens_with_complete_tool_uses_executes_them_and_continues(db_session, world):  # noqa: F811
+    """L3b: los tool_use completos de una respuesta cortada se ejecutan y el loop sigue.
+    L5f (D6): el ÚLTIMO tool_use de esa respuesta está incompleto por definición y se descarta,
+    aunque su input parezca entero; queda nombrado en el diagnóstico."""
+
     conversation, _ = _greet(db_session, world)
     fake = FakeClient([
         reply(*_three_records(world), stop="max_tokens"),
@@ -44,7 +48,7 @@ def test_max_tokens_with_complete_tool_uses_executes_them_and_continues(db_sessi
 
     result = handle_inbound(db_session, conversation.id, PRICES, client=fake)
 
-    assert len(_quotes(db_session, conversation)) == 3
+    assert len(_quotes(db_session, conversation)) == 2  # ladrillo y cemento; la cal (último bloque) se descartó
     assert len(fake.calls) == 2  # el loop siguió después del corte
     assert result.outbound.body == "Anoté ladrillo, cemento y cal. ¿Me pasás arena y hierro?"
     assert conversation.status == "open"
@@ -52,8 +56,14 @@ def test_max_tokens_with_complete_tool_uses_executes_them_and_continues(db_sessi
     assert FLAG_TECHNICAL_ERROR not in result.outbound.guardrail_flags
 
     records = [c for c in result.outbound.tool_calls if c["name"] == "record_quote"]
-    assert len(records) == 3
+    assert len(records) == 2
     assert all(c["stop_reason"] == "max_tokens" for c in records)
+
+    diagnostic = next(c for c in result.outbound.tool_calls if c["name"] == "max_tokens_diagnostic")
+    assert diagnostic["discarded_tool"] == "record_quote" and len(diagnostic["blocks"]) == 3
+    # El bloque descartado tampoco viaja al modelo en la vuelta siguiente (no tendría tool_result).
+    assistant_turn = fake.calls[1]["messages"][-2]["content"]
+    assert len(assistant_turn) == 2
 
     model_calls = next(c for c in result.outbound.tool_calls if c["name"] == "model_calls")
     assert model_calls["stop_reasons"] == ["max_tokens", "end_turn"]

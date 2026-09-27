@@ -350,6 +350,7 @@ def _run_agent(
         logger.warning("Conversación %s: falla técnica del agente (%s); sigue open", conversation.id, ", ".join(technical))
 
     tool_calls = list(turn.tool_calls)
+    tool_calls.extend(turn.diagnostics)  # L5f: qué venía en cada respuesta cortada por max_tokens
     tool_calls.append(
         {
             "name": "model_calls",

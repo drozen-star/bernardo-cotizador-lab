@@ -32,6 +32,7 @@ from typing import Protocol
 
 from app.features.whatsapp.settings import whatsapp_settings
 from app.features.whatsapp.tools import SET_STATUS
+from app.features.whatsapp.turn_diagnostics import truncation_diagnostic
 
 CACHE_CONTROL = {"type": "ephemeral"}
 
@@ -82,6 +83,8 @@ class TurnResult:
     #: Último estado pedido por set_status en el turno, si alguno.
     requested_status: str | None = None
     requested_reason: str | None = None
+    #: L5f: un diagnóstico por cada respuesta cortada por max_tokens (va a tool_calls).
+    diagnostics: list[dict] = field(default_factory=list)
 
     @property
     def total_input_tokens(self) -> int:
@@ -245,10 +248,23 @@ def run_turn(
         _record_usage(result, response, stop_reason)
 
         content = list(getattr(response, "content", []) or [])
-        messages.append({"role": "assistant", "content": content})
+        kept = content
+
+        if stop_reason == "max_tokens":
+            # D6 (doc "Handling stop reasons"): el último bloque tool_use de una respuesta cortada
+            # está incompleto, esté vacío o no; nunca se ejecuta ni queda en el historial.
+            discarded = None
+
+            if content and getattr(content[-1], "type", "") == "tool_use":
+                discarded = getattr(content[-1], "name", None)
+                kept = content[:-1]
+
+            result.diagnostics.append(truncation_diagnostic(content, discarded))
+
+        messages.append({"role": "assistant", "content": kept})
 
         result.text = _text_of(content)
-        uses = _complete_tool_uses(content)
+        uses = _complete_tool_uses(kept)
 
         if stop_reason == "max_tokens" and not uses:
             # Cortado a mitad de camino y sin nada ejecutable: el texto, si hay, está
