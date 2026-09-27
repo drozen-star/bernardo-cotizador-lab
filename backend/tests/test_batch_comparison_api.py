@@ -133,7 +133,10 @@ def test_comparison_json(client, world):
     assert ladrillo["quotes"][norte]["neto_unit"] == "1000.00"
     assert ladrillo["quotes"][norte]["costo_real_total"] == "1200000.00"  # 1000 × 1200
     assert ladrillo["quotes"][sur]["costo_real_total"] == "1080000.00"
-    assert ladrillo["quotes"][sur]["marks"] == ["flete a cotizar"]
+    # L5f: sin conversación no hay régimen: se asume facturado con marca.
+    assert ladrillo["quotes"][sur]["marks"] == ["régimen sin confirmar, se asume facturado", "flete a cotizar"]
+    assert ladrillo["quotes"][sur]["billing_regime"] is None
+    assert body["suppliers"][1]["freight"] is None and body["suppliers"][0]["billing_regime"] is None
     assert ladrillo["best_supplier_key"] == sur
 
     cemento = body["items"][1]
@@ -141,7 +144,7 @@ def test_comparison_json(client, world):
     assert cemento["quotes"][sur]["marks"] == ["moneda USD, no comparada"]
     assert cemento["best_supplier_key"] == norte
 
-    assert [s["key"] for s in body["strategies"]] == ["menor_costo_por_item", "menos_proveedores"]
+    assert [s["key"] for s in body["strategies"]] == ["menor_costo_total", "menos_proveedores"]  # L5f
     lowest, fewer = body["strategies"]
     assert lowest["total_costo_real"] == "1806000.00"  # 1.080.000 + 726.000
     assert lowest["supplier_count"] == 2
@@ -180,19 +183,20 @@ def test_comparison_xlsx(client, world):
     price = matrix.cell(row=3, column=4)
     assert isinstance(price.value, (int, float)) and price.value == 1210
     assert price.number_format == "#,##0.00"
-    total_norte = matrix.cell(row=3, column=7)
-    total_sur = matrix.cell(row=3, column=17)
+    assert matrix.cell(row=2, column=5).value == "Régimen" and matrix.cell(row=3, column=5).value == "sin confirmar"  # L5f
+    total_norte = matrix.cell(row=3, column=8)
+    total_sur = matrix.cell(row=3, column=19)
     assert total_norte.value == 1200000 and total_sur.value == 1080000
     assert total_sur.fill.fgColor.rgb.endswith("C6EFCE") and total_norte.fill.fill_type is None
 
     texts = [str(cell.value) for row in workbook["Supuestos"].iter_rows() for cell in row if cell.value]
-    assert any("facturadas (con factura A)" in text for text in texts)
+    assert any("Régimen por proveedor" in text for text in texts)  # L5f: reemplaza "se asumen facturadas"
     assert any("Buenos Aires" in text for text in texts)
     assert any(text.startswith("Alícuota IVA:") for text in texts)
     assert any("ARS" in text for text in texts)
 
     strategy_texts = [str(cell.value) for row in workbook["Estrategias"].iter_rows() for cell in row if cell.value]
-    assert "Menor costo por ítem" in strategy_texts and "Menos proveedores" in strategy_texts
+    assert "Menor costo total" in strategy_texts and "Menos proveedores" in strategy_texts  # L5f
     assert "Diferencia entre estrategias" in strategy_texts
 
 
@@ -223,6 +227,6 @@ def test_demo_script_generates_the_xlsx_on_sqlite(db_session, tmp_path, monkeypa
     out = capsys.readouterr().out
     files = list((tmp_path / "var").glob("comparativo-demo-mamposteria-*.xlsx"))
     assert len(files) == 1 and str(files[0]) in out
-    assert "[Menor costo por ítem]" in out and "[Menos proveedores]" in out
+    assert "[Menor costo total]" in out and "[Menos proveedores]" in out  # L5f
     assert "IVA sin confirmar" in out  # la cal de Ferretería Oeste
     assert load_workbook(files[0]).sheetnames == ["Matriz", "Estrategias", "Supuestos"]

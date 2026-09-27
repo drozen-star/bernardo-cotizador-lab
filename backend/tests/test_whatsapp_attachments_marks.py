@@ -156,7 +156,7 @@ def test_comparison_json_and_excel_show_the_mark(client, db_session, comparison_
 
     response = client.get(f"/rfq-batches/{comparison_world.batch.id}/comparison.xlsx", headers=HEADERS)
     workbook = load_workbook(BytesIO(response.content))
-    matrix_marks = workbook["Matriz"].cell(row=3, column=23).value  # columna Marcas de Materiales del Sur
+    matrix_marks = workbook["Matriz"].cell(row=3, column=25).value  # columna Marcas de Materiales del Sur (L5f: +Régimen)
     assert "precio leído de un adjunto" in matrix_marks
     assumptions = [str(c.value) for row in workbook["Supuestos"].iter_rows() for c in row if c.value]
     assert any("Precios leídos de un adjunto (PDF o foto): revisar contra el archivo" in t for t in assumptions)

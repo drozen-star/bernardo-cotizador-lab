@@ -15,10 +15,11 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.features.batch_comparison.regime import SupplierTerms
 from app.features.quote.model import SupplierQuote
 from app.features.rfq.batch_model import RFQBatch
 from app.features.rfq.model import RFQ
-from app.features.whatsapp.model import WhatsappConversation  # solo lectura del estado
+from app.features.whatsapp.model import WhatsappConversation  # solo lectura: estado y condiciones
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,8 @@ class SupplierRef:
     supplier_id: int | None
     name: str
     conversation_status: str | None = None
+    #: L5f: régimen y flete de la conversación de WhatsApp; None si la cotización no vino de ahí.
+    terms: SupplierTerms | None = None
 
 
 @dataclass
@@ -40,6 +43,10 @@ class LoadedBatch:
     @property
     def supplier_names(self) -> dict[str, str]:
         return {supplier.key: supplier.name for supplier in self.suppliers}
+
+    @property
+    def terms_by_key(self) -> dict[str, SupplierTerms | None]:
+        return {supplier.key: supplier.terms for supplier in self.suppliers}
 
     def quote_for(self, rfq_id: int, supplier_key: str) -> SupplierQuote | None:
         return self.quotes.get((rfq_id, supplier_key))
@@ -82,11 +89,17 @@ def load_batch(db: Session, batch_id: int) -> LoadedBatch | None:
         ids.setdefault(key, quote.supplier_id)
         latest[(quote.rfq_id, key)] = quote  # ordenadas por recencia: la última gana
 
-    statuses = _conversation_statuses(db, batch.id, [sid for sid in ids.values() if sid is not None])
+    conversations = _conversations(db, batch.id, [sid for sid in ids.values() if sid is not None])
 
     suppliers = sorted(
         (
-            SupplierRef(key=key, supplier_id=ids[key], name=names[key], conversation_status=statuses.get(ids[key]))
+            SupplierRef(
+                key=key,
+                supplier_id=ids[key],
+                name=names[key],
+                conversation_status=conversations[ids[key]].status if ids[key] in conversations else None,
+                terms=_terms_of(conversations[ids[key]]) if ids[key] in conversations else None,
+            )
             for key in names
         ),
         key=lambda supplier: (supplier.name.lower(), supplier.key),
@@ -95,12 +108,24 @@ def load_batch(db: Session, batch_id: int) -> LoadedBatch | None:
     return LoadedBatch(batch=batch, items=items, suppliers=suppliers, quotes=latest)
 
 
-def _conversation_statuses(db: Session, batch_id: int, supplier_ids: list[int]) -> dict[int, str]:
+def _terms_of(conversation: WhatsappConversation) -> SupplierTerms:
+    return SupplierTerms(
+        billing_regime=conversation.billing_regime,
+        documented_pct=conversation.documented_pct,
+        freight_cost=conversation.freight_cost,
+        freight_basis=conversation.freight_basis,
+        freight_free_over=conversation.freight_free_over,
+    )
+
+
+def _conversations(db: Session, batch_id: int, supplier_ids: list[int]) -> dict[int, WhatsappConversation]:
+    """La conversación más nueva de cada proveedor en este batch (estado y condiciones)."""
+
     if not supplier_ids:
         return {}
 
-    rows = db.execute(
-        select(WhatsappConversation.supplier_id, WhatsappConversation.status)
+    rows = db.scalars(
+        select(WhatsappConversation)
         .where(
             WhatsappConversation.rfq_batch_id == batch_id,
             WhatsappConversation.supplier_id.in_(supplier_ids),
@@ -108,4 +133,4 @@ def _conversation_statuses(db: Session, batch_id: int, supplier_ids: list[int]) 
         .order_by(WhatsappConversation.id.asc())
     ).all()
 
-    return {supplier_id: status for supplier_id, status in rows}  # la más nueva gana
+    return {conversation.supplier_id: conversation for conversation in rows}  # la más nueva gana

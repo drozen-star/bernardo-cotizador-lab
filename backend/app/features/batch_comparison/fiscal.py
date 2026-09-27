@@ -10,7 +10,9 @@ Reglas por cotización y por ítem:
 * ``iva_included`` False → neto_unit = precio
 * ``iva_included`` None  → neto_unit = precio (se asume SIN IVA, el caso más caro) + marca
 * desembolso_unit = neto_unit × (1 + alícuota/100); costo_real_unit (β=1) = neto_unit
-* totales = unitario × cantidad del RFQ; ``shipping_cost`` no nulo se suma al neto total
+* totales = unitario × cantidad del RFQ; el flete va por proveedor (``freight.py``, L5f), nunca acá
+* régimen efectivo o parcial (``regime.py``, L5f): el precio es desembolso y el crédito de IVA
+  solo alcanza a la parte facturada
 * moneda distinta de ARS o sin precio → no comparable (aparece en la matriz, no compite)
 """
 
@@ -20,6 +22,9 @@ from decimal import Decimal
 from decimal import InvalidOperation
 from decimal import ROUND_HALF_UP
 
+from app.features.batch_comparison import regime as regimes
+from app.features.batch_comparison.regime import MARK_IVA_UNCONFIRMED  # noqa: F401 - la usan porque.py y los tests
+from app.features.batch_comparison.regime import SupplierTerms
 from app.features.whatsapp import quote_completeness
 from app.features.whatsapp.attachments.marks import FLAG_FROM_ATTACHMENT
 
@@ -30,7 +35,6 @@ ONE = Decimal("1")
 HUNDRED = Decimal("100")
 CENT = Decimal("0.01")
 
-MARK_IVA_UNCONFIRMED = "IVA sin confirmar"
 MARK_FREIGHT_TO_QUOTE = "flete a cotizar"
 MARK_FREIGHT_UNCONFIRMED = "flete sin confirmar"
 MARK_NO_PRICE = "sin precio"
@@ -69,6 +73,10 @@ class ItemCost:
     payment_terms: str | None = None
     validity: str | None = None
     from_attachment: bool = False
+    #: L5f: régimen del proveedor (de la conversación) y lo cotizado tal cual (para el umbral de flete).
+    billing_regime: str | None = None
+    documented_pct: Decimal | None = None
+    quoted_total: Decimal | None = None
     marks: list[str] = field(default_factory=list)
 
 
@@ -166,8 +174,14 @@ def alicuota_for(rfq_id: int, overrides: dict[int, Decimal] | None) -> Decimal:
 
 
 # -------------------------------------------------------------------- costo
-def compute_item_cost(quote, rfq, supplier_key: str, alicuota: Decimal = DEFAULT_ALICUOTA) -> ItemCost:
-    """Aplica el modelo fiscal a una cotización de un ítem. No toca la base."""
+def compute_item_cost(
+    quote, rfq, supplier_key: str, alicuota: Decimal = DEFAULT_ALICUOTA, terms: SupplierTerms | None = None
+) -> ItemCost:
+    """Aplica el modelo fiscal a una cotización de un ítem. No toca la base.
+
+    L5f: el régimen del proveedor (``terms``) decide cómo se pasa de precio a neto, desembolso y
+    costo real (``regime.py``). El flete ya no se suma acá: va por proveedor en ``freight.py``.
+    """
 
     unit_price = to_decimal(quote.unit_price) if quote.unit_price is not None else None
     currency = (quote.currency or "").strip().upper()
@@ -187,61 +201,48 @@ def compute_item_cost(quote, rfq, supplier_key: str, alicuota: Decimal = DEFAULT
         payment_terms=(quote.payment_terms or "").strip() or None,
         validity=validity_text(quote),
         from_attachment=FLAG_FROM_ATTACHMENT in (getattr(quote, "risk_flags", None) or []),
+        billing_regime=regimes.regime_of(terms),
+        documented_pct=terms.documented_pct if terms is not None else None,
     )
 
     if currency != BASE_CURRENCY:
         cost.marks.append(f"moneda {currency or '?'}, no comparada")
-        _append_completeness_marks(cost, quote)
+        _append_completeness_marks(cost, quote, terms)
 
         return cost
 
     if unit_price is None or unit_price <= 0:
         cost.marks.append(MARK_NO_PRICE)
-        _append_completeness_marks(cost, quote)
+        _append_completeness_marks(cost, quote, terms)
 
         return cost
 
-    factor = ONE + cost.alicuota / HUNDRED
     quantity = Decimal(cost.quantity)
+    result = regimes.apply_regime(unit_price, cost.alicuota, quote.iva_included, terms)
+    cost.marks.extend(result.marks)
 
-    if quote.iva_included is True:
-        neto_unit = unit_price / factor
-    else:
-        # False o None: el precio se toma como neto. Con None se marca, porque es una
-        # suposición (la más cara para el comprador), no un dato del proveedor.
-        neto_unit = unit_price
+    # Sin dato de flete del proveedor para todo el pedido, vale lo que dijo por ítem.
+    if terms is None or not terms.has_freight_info:
+        if quote.freight_included is False:
+            cost.marks.append(MARK_FREIGHT_TO_QUOTE)
+        elif quote.freight_included is None:
+            cost.marks.append(MARK_FREIGHT_UNCONFIRMED)
 
-        if quote.iva_included is None:
-            cost.marks.append(MARK_IVA_UNCONFIRMED)
-
-    neto_total = neto_unit * quantity
-
-    if cost.shipping_cost is not None:
-        neto_total += cost.shipping_cost
-        cost.marks.append(f"flete {format_money(cost.shipping_cost)} aparte, sumado")
-    elif quote.freight_included is False:
-        cost.marks.append(MARK_FREIGHT_TO_QUOTE)
-    elif quote.freight_included is None:
-        cost.marks.append(MARK_FREIGHT_UNCONFIRMED)
-
-    cost.neto_unit = neto_unit
-    cost.desembolso_unit = neto_unit * factor
-    cost.costo_real_unit = neto_unit  # β = 1: el IVA vuelve como crédito fiscal
-    cost.neto_total = neto_total
-    cost.desembolso_total = neto_total * factor
-    cost.costo_real_total = neto_total
+    cost.neto_unit, cost.desembolso_unit, cost.costo_real_unit = result.neto_unit, result.desembolso_unit, result.costo_real_unit
+    cost.neto_total, cost.desembolso_total, cost.costo_real_total = result.totals(quantity)
+    cost.quoted_total = unit_price * quantity
     cost.comparable = True
 
-    _append_completeness_marks(cost, quote)
+    _append_completeness_marks(cost, quote, terms)
 
     return cost
 
 
-def _append_completeness_marks(cost: ItemCost, quote) -> None:
+def _append_completeness_marks(cost: ItemCost, quote, terms: SupplierTerms | None = None) -> None:
     if cost.from_attachment:
         cost.marks.append(MARK_FROM_ATTACHMENT)
 
-    missing = quote_completeness.missing_fields(quote)
+    missing = quote_completeness.missing_fields(quote, terms)
 
     for name in COMPLETENESS_MARKED:
         if name in missing:

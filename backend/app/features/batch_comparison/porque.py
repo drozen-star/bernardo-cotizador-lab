@@ -38,6 +38,22 @@ def _lead_sentence(result) -> str:
     return f"El plazo más largo es de {_plural(result.max_lead_time, 'día', 'días')}."
 
 
+def _freight_sentence(result) -> str:
+    """L5f: el flete que pesa en el total, por proveedor, una vez cada uno."""
+
+    paid = {name: amount for name, amount in result.freight_by_supplier.items() if amount > 0}
+
+    if not paid:
+        return ""
+
+    detail = _join([f"{name} {format_money(amount)}" for name, amount in paid.items()])
+
+    if len(paid) == 1:
+        return f" El flete suma {format_money(result.total_freight)} ({detail})."
+
+    return f" El flete suma {format_money(result.total_freight)}: {detail}."
+
+
 def lowest_cost_porque(result) -> str:
     uncovered = [a.item_name for a in result.assignments if not a.covered]
 
@@ -45,10 +61,10 @@ def lowest_cost_porque(result) -> str:
         return "No hay cotizaciones comparables en pesos para este pedido, así que no puedo armar la compra."
 
     text = (
-        f"Asignando cada ítem al proveedor más barato, el costo real total es "
+        f"Con la combinación de proveedores de menor costo total, el costo real es "
         f"{format_money(result.total_costo_real)} con {_plural(result.supplier_count, 'proveedor', 'proveedores')}: "
-        f"{_join(result.supplier_names)}. El desembolso, IVA incluido, es {format_money(result.total_desembolso)}. "
-        f"{_lead_sentence(result)}"
+        f"{_join(result.supplier_names)}. El desembolso es {format_money(result.total_desembolso)}."
+        f"{_freight_sentence(result)} {_lead_sentence(result)}"
     )
 
     if uncovered:
@@ -63,12 +79,12 @@ def fewer_suppliers_porque(result, lowest, diff: Decimal, pct: Decimal | None) -
 
     totals = (
         f"El costo real total es {format_money(result.total_costo_real)} y el desembolso "
-        f"{format_money(result.total_desembolso)}. {_lead_sentence(result)}"
+        f"{format_money(result.total_desembolso)}.{_freight_sentence(result)} {_lead_sentence(result)}"
     )
 
     if result.supplier_count >= lowest.supplier_count:
         text = (
-            f"Comprar al menor costo ya implica {_plural(result.supplier_count, 'proveedor', 'proveedores')}: "
+            f"Comprar al menor costo total ya implica {_plural(result.supplier_count, 'proveedor', 'proveedores')}: "
             f"{_join(result.supplier_names)}. No hay una combinación con menos proveedores que cubra los mismos ítems. "
         )
     else:
@@ -82,6 +98,10 @@ def fewer_suppliers_porque(result, lowest, diff: Decimal, pct: Decimal | None) -
             f"({_join(result.supplier_names)}) en lugar de {lowest.supplier_count} {cost_text}. "
             f"A cambio coordinás {'una entrega menos' if fewer == 1 else f'{fewer} entregas menos'}. "
         )
+        saved_freight = lowest.total_freight - result.total_freight
+
+        if saved_freight > 0:
+            text += f"Consolidar en {_join(result.supplier_names)} ahorra {format_money(saved_freight)} de flete neto. "
 
     if result.approximate:
         text += "Con más de 12 proveedores el resultado es aproximado. "

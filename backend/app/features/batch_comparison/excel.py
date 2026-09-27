@@ -32,6 +32,7 @@ WRAP = Alignment(wrap_text=True, vertical="top")
 ITEM_HEADERS = ("Ítem", "Cantidad", "Unidad")
 SUPPLIER_HEADERS = (
     "Precio cotizado",
+    "Régimen",
     "IVA",
     "Neto unitario",
     "Total costo real",
@@ -43,9 +44,12 @@ SUPPLIER_HEADERS = (
     "Marcas",
 )
 
-INVOICED_NOTE = (
-    "Todas las cotizaciones se asumen facturadas (con factura A). "
-    "Si alguna es en efectivo, este comparativo no la compara bien."
+REGIME_NOTE = (
+    "Régimen por proveedor (lo que dijo por WhatsApp): facturado = precio con factura A, el IVA vuelve como "
+    "crédito fiscal. Efectivo = sin factura: el precio es lo que sale y el costo real no descuenta IVA. "
+    "Parcial = factura una parte: el crédito de IVA alcanza solo al porcentaje facturado; sin porcentaje, "
+    "ninguno. Sin dato de régimen se asume facturado y se marca. Regímenes distintos no se comparan sin más: "
+    "una estrategia que los mezcla lleva la marca 'comparar con cuidado'."
 )
 BETA_NOTE = (
     "Desembolso = neto × (1 + alícuota): la plata que sale. "
@@ -54,8 +58,11 @@ BETA_NOTE = (
 )
 IVA_UNCONFIRMED_NOTE = "Si el proveedor no aclaró si el precio incluye IVA, se toma sin IVA (el caso más caro) y se marca."
 FREIGHT_NOTE = (
-    "Si el proveedor pasó un costo de flete, se suma al neto del ítem. "
-    "'Flete a cotizar' significa que el precio no lo incluye y no hay costo: el total queda sin flete."
+    "El flete se suma una vez por proveedor usado en cada estrategia, nunca por ítem ni prorrateado. "
+    "'Sin cargo arriba de $ X' se evalúa contra lo cotizado (precio × cantidad) de lo que la estrategia le asigna "
+    "a ese proveedor, con marca. Flete por viaje: se supone 1 viaje, con marca. El flete no lleva IVA en el costo "
+    "real; en el desembolso va con IVA si el régimen es facturado y tal cual si no. Sin dato de flete: 0, con la "
+    "marca 'flete a cotizar' o 'flete sin confirmar'."
 )
 CURRENCY_NOTE = "Moneda: ARS; otras monedas no se comparan."
 ATTACHMENT_NOTE = "Precios leídos de un adjunto (PDF o foto): revisar contra el archivo."
@@ -70,11 +77,34 @@ def _money_cell(ws, row: int, column: int, value: Decimal | None) -> None:
     cell.number_format = MONEY_FORMAT
 
 
-def _freight_text(cost) -> Decimal | str:
-    if cost.shipping_cost is not None:
-        return fiscal.money(cost.shipping_cost)
+def _freight_text(cost, terms) -> str:
+    """El flete que rige para el proveedor (L5f), o lo que dijo por ítem si no hay condiciones."""
+
+    if terms is not None and terms.has_freight_info:
+        if terms.freight_included:
+            return "incluido"
+
+        parts = []
+
+        if terms.freight_cost is not None:
+            parts.append(f"{fiscal.format_money(terms.freight_cost)} por {terms.freight_basis or 'pedido'}")
+
+        if terms.freight_free_over is not None:
+            parts.append(f"sin cargo arriba de {fiscal.format_money(terms.freight_free_over)}")
+
+        return " · ".join(parts)
 
     return {True: "incluido", False: "a cotizar", None: "sin confirmar"}[cost.freight_included]
+
+
+def _regime_text(cost) -> str:
+    if cost.billing_regime is None:
+        return "sin confirmar"
+
+    if cost.billing_regime == "parcial" and cost.documented_pct is not None:
+        return f"parcial ({format(cost.documented_pct.normalize(), 'f')}%)"
+
+    return cost.billing_regime
 
 
 def slugify(text: str, max_length: int = 40) -> str:
@@ -123,23 +153,19 @@ def _matrix_sheet(ws, result: BatchComparison) -> None:
 
             first = len(ITEM_HEADERS) + 1 + s_index * width
             _money_cell(ws, r_index, first, cost.unit_price)
-            ws.cell(row=r_index, column=first + 1, value=fiscal.IVA_LABELS[cost.iva_included])
-            _money_cell(ws, r_index, first + 2, cost.neto_unit)
-            _money_cell(ws, r_index, first + 3, cost.costo_real_total)
-            _money_cell(ws, r_index, first + 4, cost.desembolso_total)
-            freight = _freight_text(cost)
-            freight_cell = ws.cell(row=r_index, column=first + 5, value=freight)
-
-            if isinstance(freight, Decimal):
-                freight_cell.number_format = MONEY_FORMAT
-
-            ws.cell(row=r_index, column=first + 6, value=cost.lead_time)
-            ws.cell(row=r_index, column=first + 7, value=cost.payment_terms)
-            ws.cell(row=r_index, column=first + 8, value=cost.validity)
-            ws.cell(row=r_index, column=first + 9, value="; ".join(cost.marks) or None)
+            ws.cell(row=r_index, column=first + 1, value=_regime_text(cost))
+            ws.cell(row=r_index, column=first + 2, value=fiscal.IVA_LABELS[cost.iva_included])
+            _money_cell(ws, r_index, first + 3, cost.neto_unit)
+            _money_cell(ws, r_index, first + 4, cost.costo_real_total)
+            _money_cell(ws, r_index, first + 5, cost.desembolso_total)
+            ws.cell(row=r_index, column=first + 6, value=_freight_text(cost, supplier.terms))
+            ws.cell(row=r_index, column=first + 7, value=cost.lead_time)
+            ws.cell(row=r_index, column=first + 8, value=cost.payment_terms)
+            ws.cell(row=r_index, column=first + 9, value=cost.validity)
+            ws.cell(row=r_index, column=first + 10, value="; ".join(cost.marks) or None)
 
             if supplier.key == best_key and cost.comparable:
-                ws.cell(row=r_index, column=first + 3).fill = BEST_FILL
+                ws.cell(row=r_index, column=first + 4).fill = BEST_FILL
 
     ws.column_dimensions["A"].width = 38
 
@@ -166,6 +192,14 @@ def _strategy_block(ws, row: int, result: StrategyResult) -> int:
             ws.cell(row=row, column=5, value=assignment.cost.lead_time)
             ws.cell(row=row, column=6, value="; ".join(assignment.cost.marks) or None)
 
+        row += 1
+
+    # L5f: una fila de flete por proveedor usado (neto en costo real, con IVA si corresponde en desembolso).
+    for name, amount in result.freight_by_supplier.items():
+        ws.cell(row=row, column=1, value=f"Flete {name}")
+        ws.cell(row=row, column=2, value=name)
+        _money_cell(ws, row, 3, amount)
+        _money_cell(ws, row, 4, result.freight_desembolso_by_supplier.get(name, amount))
         row += 1
 
     ws.cell(row=row, column=1, value="Total costo real").font = BOLD
@@ -216,7 +250,7 @@ def _assumptions_sheet(ws, result: BatchComparison) -> None:
         ("Pedido", batch.name),
         ("Obra", site),
         ("Generado", generated),
-        ("Facturación", INVOICED_NOTE),
+        ("Régimen de facturación", REGIME_NOTE),
         ("Desembolso vs costo real", BETA_NOTE),
         ("IVA sin confirmar", IVA_UNCONFIRMED_NOTE),
         ("Flete", FREIGHT_NOTE),

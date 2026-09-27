@@ -39,13 +39,18 @@ class BatchComparison:
         return None
 
     def best_supplier_key(self, rfq_id: int) -> str | None:
-        """El proveedor con menor costo real para el ítem (para resaltar en la matriz)."""
+        """El proveedor con menor costo real para el ítem (para resaltar en la matriz).
 
-        for assignment in self.comparison.lowest_cost.assignments:
-            if assignment.rfq_id == rfq_id:
-                return assignment.supplier_key
+        L5f: se calcula por ítem, porque la estrategia "menor costo total" puede asignar un ítem
+        a un proveedor que no es el más barato en ese ítem (el flete se paga una vez).
+        """
 
-        return None
+        candidates = [cost for cost in self.costs if cost.rfq_id == rfq_id and cost.comparable]
+
+        if not candidates:
+            return None
+
+        return min(candidates, key=lambda cost: strategies.rank_key(cost, self.loaded.supplier_names)).supplier_key
 
 
 def build(db: Session, batch_id: int, alicuotas: dict[int, Decimal] | None = None, *, now: datetime | None = None) -> BatchComparison | None:
@@ -71,9 +76,9 @@ def build(db: Session, batch_id: int, alicuotas: dict[int, Decimal] | None = Non
             quote = loaded.quote_for(rfq.id, supplier.key)
 
             if quote is not None:
-                costs.append(fiscal.compute_item_cost(quote, rfq, supplier.key, resolved[rfq.id]))
+                costs.append(fiscal.compute_item_cost(quote, rfq, supplier.key, resolved[rfq.id], supplier.terms))
 
-    comparison = strategies.compare(loaded.items, costs, loaded.supplier_names)
+    comparison = strategies.compare(loaded.items, costs, loaded.supplier_names, loaded.terms_by_key)
 
     return BatchComparison(
         loaded=loaded, alicuotas=resolved, costs=costs, comparison=comparison, generated_at=now or utcnow()
@@ -106,7 +111,26 @@ def _cost_json(cost: ItemCost) -> dict:
         "payment_terms": cost.payment_terms,
         "validity": cost.validity,
         "from_attachment": cost.from_attachment,
+        "billing_regime": cost.billing_regime,
+        "documented_pct": None if cost.documented_pct is None else str(cost.documented_pct),
+        "quoted_total": _amount(cost.quoted_total),
         "marks": list(cost.marks),
+    }
+
+
+def _terms_json(terms) -> dict:
+    if terms is None:
+        return {"billing_regime": None, "documented_pct": None, "freight": None}
+
+    return {
+        "billing_regime": terms.billing_regime,
+        "documented_pct": None if terms.documented_pct is None else str(terms.documented_pct),
+        "freight": {
+            "included": terms.freight_included,
+            "cost": _amount(terms.freight_cost),
+            "basis": terms.freight_basis,
+            "free_over": _amount(terms.freight_free_over),
+        },
     }
 
 
@@ -127,6 +151,8 @@ def _strategy_json(result: StrategyResult) -> dict:
         ],
         "total_costo_real": _amount(result.total_costo_real),
         "total_desembolso": _amount(result.total_desembolso),
+        "total_freight": _amount(result.total_freight),
+        "freight_by_supplier": {name: _amount(amount) for name, amount in result.freight_by_supplier.items()},
         "supplier_count": result.supplier_count,
         "supplier_names": list(result.supplier_names),
         "max_lead_time": result.max_lead_time,
@@ -157,6 +183,7 @@ def to_json(result: BatchComparison) -> dict:
                 "supplier_id": s.supplier_id,
                 "name": s.name,
                 "conversation_status": s.conversation_status,
+                **_terms_json(s.terms),
             }
             for s in loaded.suppliers
         ],

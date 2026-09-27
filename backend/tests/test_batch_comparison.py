@@ -12,8 +12,12 @@ from app.features.batch_comparison.fiscal import compute_item_cost
 from app.features.batch_comparison.fiscal import format_money
 from app.features.batch_comparison.fiscal import format_pct
 from app.features.batch_comparison.fiscal import parse_alicuotas
+from app.features.batch_comparison.regime import SupplierTerms
 
 _ids = iter(range(1, 10_000))
+
+#: L5f: sin condiciones el régimen queda "sin confirmar" y marca; estos tests asumen facturado.
+FACTURADO = SupplierTerms(billing_regime="facturado")
 
 
 def _rfq(rfq_id: int, name: str = "Ítem", quantity: int = 10):
@@ -31,8 +35,8 @@ def _quote(price, **overrides):
     return NS(**fields)
 
 
-def _cost(price, rfq=None, supplier="id:1", alicuota=fiscal.DEFAULT_ALICUOTA, **overrides):
-    return compute_item_cost(_quote(price, **overrides), rfq or _rfq(1), supplier, alicuota)
+def _cost(price, rfq=None, supplier="id:1", alicuota=fiscal.DEFAULT_ALICUOTA, terms=FACTURADO, **overrides):
+    return compute_item_cost(_quote(price, **overrides), rfq or _rfq(1), supplier, alicuota, terms)
 
 
 # ------------------------------------------------------------------- fiscal
@@ -80,14 +84,17 @@ def test_freight_not_included_without_cost_is_marked_to_quote():
     assert cost.costo_real_total == Decimal("1000")  # el costo queda sin flete
 
 
-def test_shipping_cost_is_added_to_the_net_total():
+def test_shipping_cost_is_no_longer_added_to_the_net_total():
+    """L5f: el flete va por proveedor (freight.py), nunca sumado al ítem. shipping_cost queda como dato."""
+
     cost = _cost("100", iva_included=False, freight_included=False, shipping_cost=Decimal("5000"))
 
-    assert cost.neto_total == Decimal("6000")
-    assert cost.costo_real_total == Decimal("6000")
-    assert cost.desembolso_total == Decimal("7260")
-    assert any(mark.startswith("flete $ 5.000,00 aparte") for mark in cost.marks)
-    assert fiscal.MARK_FREIGHT_TO_QUOTE not in cost.marks
+    assert cost.neto_total == Decimal("1000")
+    assert cost.costo_real_total == Decimal("1000")
+    assert cost.desembolso_total == Decimal("1210")
+    assert cost.shipping_cost == Decimal("5000")
+    assert not any("aparte, sumado" in mark for mark in cost.marks)
+    assert fiscal.MARK_FREIGHT_TO_QUOTE in cost.marks
 
 
 def test_freight_unconfirmed_is_marked():
@@ -130,7 +137,7 @@ def test_everything_is_decimal_even_from_ints():
     cost = _cost(890, iva_included=True, shipping_cost=1500)
 
     for name in ("unit_price", "neto_unit", "desembolso_unit", "costo_real_unit", "neto_total",
-                 "desembolso_total", "costo_real_total", "shipping_cost", "alicuota"):
+                 "desembolso_total", "costo_real_total", "shipping_cost", "alicuota", "quoted_total"):
         assert isinstance(getattr(cost, name), Decimal), name
 
 
@@ -245,7 +252,7 @@ def test_item_without_comparable_quote_is_marked_and_kept_in_the_list():
         assert "Hierro: sin cotización" in result.marks
 
     assert "Quedan sin cotización comparable: Hierro." in comparison.lowest_cost.porque
-    assert "Comprar al menor costo ya implica 1 proveedor: Corralón Norte." in comparison.fewer_suppliers.porque
+    assert "Comprar al menor costo total ya implica 1 proveedor: Corralón Norte." in comparison.fewer_suppliers.porque
     assert comparison.difference_amount == Decimal("0")
 
 
@@ -263,7 +270,9 @@ def test_more_than_twelve_suppliers_uses_greedy_and_marks_approximate():
     assert fewer.supplier_names == ["Proveedor 14"]
     assert fewer.total_costo_real == Decimal("1950")
     assert "aproximado" in fewer.porque
-    assert comparison.lowest_cost.supplier_count == 13 and comparison.lowest_cost.approximate is False
+    # L5f: con más de 12 proveedores "menor costo total" también es aproximada (el más barato por ítem).
+    assert comparison.lowest_cost.supplier_count == 13 and comparison.lowest_cost.approximate is True
+    assert strategies.MARK_APPROXIMATE in comparison.lowest_cost.marks
 
 
 # ----------------------------------------------------------------- salvedades
