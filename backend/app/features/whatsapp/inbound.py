@@ -275,6 +275,8 @@ def decide(db: Session, payload: InboundPayload) -> Decision:
     if attachments_pending.is_attachment(payload):
         # L5e: provisorio en el request; el job de background descarga y transcribe.
         message = attachments_pending.persist_pending(db, conversation, payload)
+        _in_flight.add(payload.wa_message_id)
+        gate.enqueue(conversation.id)  # el job del adjunto toma el turno antes de descargar
         return Decision(
             owned=True, reason=reason, conversation_id=conversation.id, supplier_id=supplier.id,
             action="attachment", flags=[attachments_pending.FLAG_PENDING], message_id=message.id,

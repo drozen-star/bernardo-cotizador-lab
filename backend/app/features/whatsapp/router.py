@@ -24,6 +24,7 @@ from app.core.dependencies import DBSession
 from app.features.whatsapp import approval
 from app.features.whatsapp import drafts
 from app.features.whatsapp import inbound as inbound_flow
+from app.features.whatsapp.attachments import job as attachment_job
 from app.features.whatsapp.inbound import InboundPayload
 from app.features.whatsapp.model import WhatsappConversation
 from app.features.whatsapp.model import WhatsappMessage
@@ -154,6 +155,11 @@ def receive_inbound(
         # Sesión propia adentro del job: la del request se cierra al responder.
         background.add_task(
             inbound_flow.run_agent_job, decision.conversation_id, payload.text or "", payload.wa_message_id
+        )
+    elif decision.action == "attachment" and decision.conversation_id is not None and decision.message_id is not None:
+        # L5e: descarga, transcripción y agente, todo en el job (toma el turno antes de bajar).
+        background.add_task(
+            attachment_job.run_attachment_job, decision.conversation_id, decision.message_id, payload.wa_message_id
         )
 
     return InboundResponse(**inbound_flow.decision_payload(decision))

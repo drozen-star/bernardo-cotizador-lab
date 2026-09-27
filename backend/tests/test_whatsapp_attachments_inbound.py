@@ -2,11 +2,15 @@
 
 # ruff: noqa: F811 - el fixture `lab` se importa y se recibe como parámetro
 
+import pytest
+
 from app.features.whatsapp import inbound as inbound_flow
+from app.features.whatsapp.attachments import job
 from app.features.whatsapp.attachments import pending
 from app.features.whatsapp.inbound import InboundPayload
 from app.features.whatsapp.model import WhatsappMessage
 from app.features.whatsapp.service import handle_inbound
+from app.features.whatsapp.turn_gate import gate
 from tests.test_whatsapp_agent import FakeClient
 from tests.test_whatsapp_agent import reply
 from tests.test_whatsapp_agent import text
@@ -26,6 +30,19 @@ def media_payload(wa_id="wamid.doc.1", type_="document", media_id="MEDIA123", fi
 def _stored(db_session, wa_id):
     db_session.expire_all()
     return db_session.query(WhatsappMessage).filter(WhatsappMessage.wa_message_id == wa_id).one()
+
+
+@pytest.fixture(autouse=True)
+def job_calls(monkeypatch):
+    """Acá se prueba el request: el job del adjunto (fase 2) solo se registra, no corre."""
+
+    calls = []
+    monkeypatch.setattr(job, "run_attachment_job", lambda *args: calls.append(args))
+    gate.reset()
+    inbound_flow._in_flight.clear()
+    yield calls
+    gate.reset()
+    inbound_flow._in_flight.clear()
 
 
 # ---------------------------------------------------------------- contrato
@@ -49,7 +66,7 @@ def test_pending_helpers_round_trip():
 
 
 # ---------------------------------------------------------------- inbound
-def test_attachment_is_stored_as_pending_in_the_request(client, db_session, lab, monkeypatch):
+def test_attachment_is_stored_as_pending_in_the_request(client, db_session, lab, monkeypatch, job_calls):
     _post(client, payload(wa_id="wamid.a.1"))
     calls = []
     monkeypatch.setattr(inbound_flow, "run_agent_job", lambda *args: calls.append(args))
@@ -60,6 +77,8 @@ def test_attachment_is_stored_as_pending_in_the_request(client, db_session, lab,
     assert calls == []  # el agente no corre en el request: lo hace el job del adjunto
 
     stored = _stored(db_session, "wamid.a.2")
+    assert job_calls == [(stored.conversation_id, stored.id, "wamid.a.2")]  # encolado con el id del provisorio
+    assert gate.pending(stored.conversation_id) == 1 and "wamid.a.2" in inbound_flow._in_flight
     assert stored.direction == "inbound"
     assert stored.body == "[adjunto: lista.pdf] (procesando)\nahí te mandé la lista"
     assert stored.media_type == "document"
