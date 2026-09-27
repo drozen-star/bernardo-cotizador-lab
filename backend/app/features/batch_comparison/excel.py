@@ -58,6 +58,7 @@ FREIGHT_NOTE = (
     "'Flete a cotizar' significa que el precio no lo incluye y no hay costo: el total queda sin flete."
 )
 CURRENCY_NOTE = "Moneda: ARS; otras monedas no se comparan."
+ATTACHMENT_NOTE = "Precios leídos de un adjunto (PDF o foto): revisar contra el archivo."
 
 
 # ------------------------------------------------------------------ helpers
@@ -220,6 +221,7 @@ def _assumptions_sheet(ws, result: BatchComparison) -> None:
         ("IVA sin confirmar", IVA_UNCONFIRMED_NOTE),
         ("Flete", FREIGHT_NOTE),
         ("Moneda", CURRENCY_NOTE),
+        ("Adjuntos", ATTACHMENT_NOTE),
     ]
 
     for rfq in result.loaded.items:

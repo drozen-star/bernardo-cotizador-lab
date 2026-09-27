@@ -64,7 +64,11 @@ pesos y en porcentaje.
 
 `IVA sin confirmar` · `flete a cotizar` · `flete sin confirmar` · `flete $ X aparte, sumado` ·
 `falta plazo` · `falta forma de pago` · `falta validez` · `moneda <X>, no comparada` ·
-`sin precio` · `sin cotización` (ítem sin cotización comparable) · `resultado aproximado`.
+`sin precio` · `sin cotización` (ítem sin cotización comparable) · `resultado aproximado` ·
+`precio leído de un adjunto` (L5e: la cotización tiene `from_attachment` en `risk_flags`
+porque el precio salió de un PDF o una foto transcriptos; el JSON lo expone como
+`from_attachment: true`, la Matriz lo muestra como marca, Supuestos lo aclara y el porqué
+lo lista entre las salvedades que cambian el costo: "revisar contra el archivo").
 
 ## Endpoints
 

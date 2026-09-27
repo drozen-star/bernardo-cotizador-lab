@@ -29,6 +29,7 @@ from app.features.quote.model import SupplierQuote
 from app.features.rfq.model import RFQ
 from app.features.supplier.model import Supplier
 from app.features.whatsapp import tools
+from app.features.whatsapp.attachments import marks as attachment_marks
 from app.features.whatsapp.loop import ToolOutcome
 from app.features.whatsapp.model import WhatsappConversation
 from app.features.whatsapp.quote_completeness import VALIDITY_PREFIX
@@ -152,6 +153,8 @@ class QuoteToolExecutor:
     inbound_bodies: list[str]
     #: Consultas al comprador pedidas en este turno (auditoría; van a tool_calls).
     buyer_questions: list[str] = field(default_factory=list)
+    #: L5e: cuerpos de los inbounds transcriptos de un adjunto (subconjunto de inbound_bodies).
+    attachment_bodies: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------- dispatch
     def __call__(self, name: str, tool_input: dict) -> ToolOutcome:
@@ -259,6 +262,9 @@ class QuoteToolExecutor:
             quote.remarks = None
 
         quote.unparsed_notes = evidence[:4000]
+        attachment_marks.apply_from_attachment(
+            quote, evidence, self.inbound_bodies, self.attachment_bodies, literal=evidence_is_literal
+        )
         quote.completeness, quote.missing_fields = assess(quote)
         quote.submitted_at = utcnow()  # se pisa en cada actualización, a propósito
 

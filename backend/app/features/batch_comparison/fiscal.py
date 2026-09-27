@@ -21,6 +21,7 @@ from decimal import InvalidOperation
 from decimal import ROUND_HALF_UP
 
 from app.features.whatsapp import quote_completeness
+from app.features.whatsapp.attachments.marks import FLAG_FROM_ATTACHMENT
 
 DEFAULT_ALICUOTA = Decimal("21")
 BASE_CURRENCY = "ARS"
@@ -33,6 +34,8 @@ MARK_IVA_UNCONFIRMED = "IVA sin confirmar"
 MARK_FREIGHT_TO_QUOTE = "flete a cotizar"
 MARK_FREIGHT_UNCONFIRMED = "flete sin confirmar"
 MARK_NO_PRICE = "sin precio"
+#: L5e: el precio salió de un PDF o una foto transcriptos (``risk_flags`` de la cotización).
+MARK_FROM_ATTACHMENT = "precio leído de un adjunto"
 
 #: Cómo se muestra ``iva_included`` en la matriz.
 IVA_LABELS = {True: "incluido", False: "no incluido", None: "sin confirmar"}
@@ -65,6 +68,7 @@ class ItemCost:
     lead_time: int | None = None
     payment_terms: str | None = None
     validity: str | None = None
+    from_attachment: bool = False
     marks: list[str] = field(default_factory=list)
 
 
@@ -182,6 +186,7 @@ def compute_item_cost(quote, rfq, supplier_key: str, alicuota: Decimal = DEFAULT
         lead_time=quote.lead_time,
         payment_terms=(quote.payment_terms or "").strip() or None,
         validity=validity_text(quote),
+        from_attachment=FLAG_FROM_ATTACHMENT in (getattr(quote, "risk_flags", None) or []),
     )
 
     if currency != BASE_CURRENCY:
@@ -233,6 +238,9 @@ def compute_item_cost(quote, rfq, supplier_key: str, alicuota: Decimal = DEFAULT
 
 
 def _append_completeness_marks(cost: ItemCost, quote) -> None:
+    if cost.from_attachment:
+        cost.marks.append(MARK_FROM_ATTACHMENT)
+
     missing = quote_completeness.missing_fields(quote)
 
     for name in COMPLETENESS_MARKED:

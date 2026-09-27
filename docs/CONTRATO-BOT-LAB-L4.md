@@ -42,8 +42,38 @@ Header ausente, distinto o secreto no configurado en el lab → `401` sin detall
 | `timestamp` | string | el de Meta, como llega. |
 | `type` | string | `text`, `image`, `audio`, `document`, etc. |
 | `text` | string o null | cuerpo del texto; null si no es texto. |
+| `media_id` | string o null (≤256) | L5e: id del media de Meta para `document` e `image`. El lab lo descarga. |
+| `mime_type` | string o null (≤128) | L5e: el mime que informa Meta. |
+| `filename` | string o null (≤255) | L5e: nombre del archivo (documentos). |
+| `caption` | string o null (≤3000) | L5e: texto que acompaña al adjunto. |
 
 Body inválido → `422`.
+
+### Adjuntos (L5e)
+
+Con `type` en `document` o `image` **y** `media_id`, el lab responde en el request como
+siempre (`owned: true` con el motivo de la conversación) y guarda un inbound provisorio
+`[adjunto: <filename o type>] (procesando)` con `media_url = wa-media:<media_id>` y el flag
+`attachment_pending`. Después, en background, **descarga el archivo de Meta con el
+`media_id`** (dos pasos con el mismo token: metadata → URL firmada → archivo; el media_id
+vale 7 días según Meta) y lo convierte a texto:
+
+| Tipo | Cómo | Flags finales |
+| --- | --- | --- |
+| `.xlsx` | filas literales `"<hoja> F<n>: a \| b \| c"`; si no entran en el tope, el modelo elige filas y se copian tal cual | `attachment_xlsx` |
+| PDF | transcripción textual de las líneas de los ítems y las condiciones generales | `attachment_pdf`, `attachment_transcribed` |
+| foto jpeg/png | ídem | `attachment_image`, `attachment_transcribed` |
+| otro (`.xls`, `.docx`, …), demasiado grande (> 10 MiB) o falla de descarga | el inbound queda `[adjunto no procesado: <nombre> — <motivo>]` | `attachment_failed` |
+
+Motivos: `unsupported_type`, `too_large`, `download_failed`, `processing_failed`. En todos los
+casos el agente corre después del adjunto (con una falla, redacta el pedido de reenvío; ese
+borrador también lo aprueba una persona). Sin coincidencias con el pedido: `[adjunto: <nombre>]
+sin ítems del pedido`. Los precios registrados a partir de un PDF o una foto llevan
+`from_attachment` en `risk_flags` de la cotización.
+
+Audio, video, sticker, y `document`/`image` **sin** `media_id` (bot viejo) siguen como
+`unsupported_media`, sin agente. El lab nunca loguea la URL firmada, el token, el contenido,
+el nombre del archivo ni el caption.
 
 ### Respuesta `200`
 

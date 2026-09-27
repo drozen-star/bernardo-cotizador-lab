@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from app.features.batch_comparison.fiscal import MARK_FREIGHT_TO_QUOTE
 from app.features.batch_comparison.fiscal import MARK_FREIGHT_UNCONFIRMED
+from app.features.batch_comparison.fiscal import MARK_FROM_ATTACHMENT
 from app.features.batch_comparison.fiscal import MARK_IVA_UNCONFIRMED
 from app.features.batch_comparison.fiscal import format_money
 from app.features.batch_comparison.fiscal import format_pct
@@ -89,31 +90,43 @@ def fewer_suppliers_porque(result, lowest, diff: Decimal, pct: Decimal | None) -
 
 
 # ------------------------------------------------------------- salvedades
-def _caveat_sentence(name: str, assigned: list[str], to_quote: list[str], unconfirmed: list[str], iva: list[str]) -> str:
-    """Una oración por proveedor sobre las marcas que afectan el costo (flete, IVA)."""
+_CAVEAT_KINDS = ("to_quote", "unconfirmed", "iva", "attachment")
+
+
+def _caveat_sentence(name: str, entry: dict[str, list[str]]) -> str:
+    """Una oración por proveedor sobre las marcas que afectan el costo (flete, IVA, adjunto)."""
 
     clauses = []
 
-    for items, verb in ((to_quote, "no incluyó"), (unconfirmed, "no aclaró")):
+    for kind, verb in (("to_quote", "no incluyó"), ("unconfirmed", "no aclaró")):
+        items = entry[kind]
+
         if items:
-            scope = "en ningún ítem" if len(items) == len(assigned) > 1 else f"en {_join(items)}"
+            scope = "en ningún ítem" if len(items) == len(entry["assigned"]) > 1 else f"en {_join(items)}"
             clauses.append(f"{verb} el flete {scope}")
 
-    if clauses:
-        text = f"{name} {' y '.join(clauses)}: el total no lo contempla"
+    text = f"{name} {' y '.join(clauses)}: el total no lo contempla" if clauses else ""
+    iva, attachment = entry["iva"], entry["attachment"]
 
-        if iva:
+    if iva:
+        if text:
             text += f"; además, no aclaró el IVA en {_join(iva)}: se tomó sin IVA, el caso más caro"
+        else:
+            text = f"En {_join(iva)}, {name} no aclaró el IVA: se tomó sin IVA, el caso más caro"
 
-        return text + "."
+    if attachment:
+        if text:
+            text += f"; además, el precio de {_join(attachment)} se leyó de un adjunto: revisar contra el archivo"
+        else:
+            text = f"{name}: el precio de {_join(attachment)} se leyó de un adjunto, revisar contra el archivo"
 
-    return f"En {_join(iva)}, {name} no aclaró el IVA: se tomó sin IVA, el caso más caro."
+    return text + "."
 
 
 def cost_caveats(result) -> str:
-    """Salvedades de las cotizaciones elegidas cuyo costo puede cambiar: flete e IVA.
-
-    Las faltas de plazo, pago o validez no van acá porque no cambian el costo.
+    """Salvedades de las cotizaciones elegidas cuyo costo puede cambiar: flete, IVA y precio
+    leído de un adjunto (L5e). Las faltas de plazo, pago o validez no van acá porque no cambian
+    el costo.
     """
 
     by_supplier: dict[str, dict[str, list[str]]] = {}
@@ -122,9 +135,7 @@ def cost_caveats(result) -> str:
         if assignment.cost is None:
             continue
 
-        entry = by_supplier.setdefault(
-            assignment.supplier_name, {"assigned": [], "to_quote": [], "unconfirmed": [], "iva": []}
-        )
+        entry = by_supplier.setdefault(assignment.supplier_name, {"assigned": [], **{kind: [] for kind in _CAVEAT_KINDS}})
         entry["assigned"].append(assignment.item_name)
         marks = assignment.cost.marks
 
@@ -136,15 +147,15 @@ def cost_caveats(result) -> str:
         if MARK_IVA_UNCONFIRMED in marks:
             entry["iva"].append(assignment.item_name)
 
+        if MARK_FROM_ATTACHMENT in marks:
+            entry["attachment"].append(assignment.item_name)
+
     flagged = [
         (name, entry)
         for name, entry in sorted(by_supplier.items(), key=lambda pair: pair[0].lower())
-        if entry["to_quote"] or entry["unconfirmed"] or entry["iva"]
+        if any(entry[kind] for kind in _CAVEAT_KINDS)
     ]
-    sentences = [
-        _caveat_sentence(name, entry["assigned"], entry["to_quote"], entry["unconfirmed"], entry["iva"])
-        for name, entry in flagged[:MAX_CAVEAT_SUPPLIERS]
-    ]
+    sentences = [_caveat_sentence(name, entry) for name, entry in flagged[:MAX_CAVEAT_SUPPLIERS]]
     extra = len(flagged) - MAX_CAVEAT_SUPPLIERS
 
     if extra > 0:

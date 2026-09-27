@@ -105,6 +105,7 @@ def _cost_json(cost: ItemCost) -> dict:
         "lead_time": cost.lead_time,
         "payment_terms": cost.payment_terms,
         "validity": cost.validity,
+        "from_attachment": cost.from_attachment,
         "marks": list(cost.marks),
     }
 

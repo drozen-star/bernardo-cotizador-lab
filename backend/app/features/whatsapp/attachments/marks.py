@@ -18,3 +18,30 @@ FLAG_FROM_ATTACHMENT = "from_attachment"
 
 #: Prefijo con el que se guarda el media_id de Meta en ``whatsapp_messages.media_url``.
 MEDIA_URL_PREFIX = "wa-media:"
+
+
+def apply_from_attachment(quote, evidence: str, inbound_bodies: list[str], attachment_bodies: list[str], *, literal) -> bool:
+    """Suma ``from_attachment`` a ``risk_flags`` si la evidencia es literal SOLO en un adjunto
+    transcripto; la quita si es literal en un mensaje de texto del proveedor. Nunca pisa las
+    demás marcas. ``literal(evidence, bodies)`` es la comparación literal del quote_writer.
+    Devuelve si la marca quedó puesta.
+    """
+
+    transcribed = set(attachment_bodies)
+    text_bodies = [body for body in inbound_bodies if body not in transcribed]
+    in_text = literal(evidence, text_bodies)
+    in_attachment = literal(evidence, attachment_bodies)
+    flags = list(quote.risk_flags or [])
+
+    if in_attachment and not in_text:
+        if FLAG_FROM_ATTACHMENT not in flags:
+            flags.append(FLAG_FROM_ATTACHMENT)
+            quote.risk_flags = flags  # lista nueva: el JSON se marca como modificado
+
+        return True
+
+    if in_text and FLAG_FROM_ATTACHMENT in flags:
+        flags.remove(FLAG_FROM_ATTACHMENT)
+        quote.risk_flags = flags
+
+    return FLAG_FROM_ATTACHMENT in flags

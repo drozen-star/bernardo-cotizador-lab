@@ -33,6 +33,7 @@ from app.features.whatsapp import drafts
 from app.features.whatsapp import guardrails
 from app.features.whatsapp import prompt as prompts
 from app.features.whatsapp import tools
+from app.features.whatsapp.attachments.marks import FLAG_TRANSCRIBED
 from app.features.whatsapp.loop import ModelClient
 from app.features.whatsapp.loop import TurnResult
 from app.features.whatsapp.loop import default_client
@@ -285,6 +286,12 @@ def _run_agent(
         rfqs_by_id={rfq.id: rfq for rfq in rfqs},
         supplier=supplier,
         inbound_bodies=[message.body for message in messages if message.direction == "inbound"],
+        # L5e: lo transcripto de un PDF o una foto no es literal del proveedor (marca from_attachment).
+        attachment_bodies=[
+            message.body
+            for message in messages
+            if message.direction == "inbound" and FLAG_TRANSCRIBED in (message.guardrail_flags or [])
+        ],
     )
 
     turn = run_turn(
