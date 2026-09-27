@@ -235,6 +235,30 @@ class WhatsappMessage(TimestampMixin, Base):
         nullable=True,
     )
 
+    # ------------------------------------------------------ borradores (L5b)
+    #: Un borrador descartado no se manda ni entra al historial del modelo. Motivos:
+    #: "manual" (Diego), "superseded" (llegó un inbound nuevo y el agente redactó otro).
+    discarded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    discard_reason: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    #: Texto original del agente cuando Diego editó el borrador (solo la primera vez).
+    original_body: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    edited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     # -------------------------------------------------------------- relations
     conversation = relationship(
         "WhatsappConversation",
@@ -243,7 +267,14 @@ class WhatsappMessage(TimestampMixin, Base):
 
     @property
     def is_draft(self) -> bool:
-        return self.direction == "outbound" and self.approved_by is None and self.sent_at is None
+        """Pendiente de aprobación: outbound, sin enviar, sin aprobar y sin descartar."""
+
+        return (
+            self.direction == "outbound"
+            and self.approved_by is None
+            and self.sent_at is None
+            and self.discarded_at is None
+        )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<WhatsappMessage id={self.id} {self.direction} conv={self.conversation_id}>"

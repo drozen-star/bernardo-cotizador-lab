@@ -90,13 +90,32 @@ Por cada decisión: `owned`, `reason`, últimos 4 dígitos del teléfono, `wa_me
 
 ## Lado admin (no lo usa el bot)
 
-- `GET /whatsapp/conversations/{id}/drafts` con header `X-Bernardo-Lab-Admin: <LAB_ADMIN_TOKEN>`:
-  borradores pendientes, destino y si la ventana de 24 h está abierta.
-- `POST /whatsapp/conversations/{id}/approve` mismo header, body opcional `{"message_id": N}`
-  (sin body: el último borrador pendiente). `200` con el mensaje enviado; `409 window_closed`
-  fuera de las 24 h del último inbound; `409 already_sent`; `404 no_draft`; `502
-  meta_send_failed:<code>` si Meta falla (el borrador sigue pendiente). Sin edición del texto
-  en L4.
+Todos con header `X-Bernardo-Lab-Admin: <LAB_ADMIN_TOKEN>`. Un borrador está **pendiente** si es
+saliente, no se envió, no se aprobó y no se descartó.
+
+- `GET /whatsapp/conversations/{id}/drafts`: borradores pendientes, destino y si la ventana de
+  24 h está abierta. Cada borrador trae `body`, `original_body` (si se editó), `edited_at`,
+  `discarded_at` y `discard_reason`.
+- `POST /whatsapp/conversations/{id}/approve`, body opcional `{"message_id": N}`. Sin body se
+  aprueba el único borrador pendiente; con más de uno → `409 ambiguous_draft` (hay que elegir).
+  `200` con el mensaje enviado; `409 window_closed` fuera de las 24 h del último inbound;
+  `409 already_sent`; `409 draft_discarded`; `404 no_draft`; `502 meta_send_failed:<code>` si
+  Meta falla (el borrador sigue pendiente).
+- `POST /whatsapp/conversations/{id}/drafts/{message_id}/discard`, body opcional
+  `{"reason": "<hasta 32 caracteres>"}` (default `manual`). `200` con el borrador descartado;
+  `409 already_sent` / `409 already_discarded`.
+- `PATCH /whatsapp/conversations/{id}/drafts/{message_id}`, body `{"body": "<texto>"}`. El texto
+  pasa por los **mismos frenos** que un borrador del agente; si salta cualquier flag (bloqueante o
+  de voz) no se guarda nada y la respuesta es `422 {"detail": {"code": "guardrail", "flags":
+  [...]}}`. Vacío o más largo que el tope → `422 invalid_body`. `200` con el borrador editado
+  (`original_body` guarda el texto del agente la primera vez). Lo que se aprueba es exactamente lo
+  que se manda.
+- Un mensaje que no es de esa conversación o no es saliente → `404 draft_not_found`.
+
+Reemplazo automático: cuando llega un inbound nuevo y el agente redacta otra respuesta, el
+borrador pendiente anterior se descarta con motivo `superseded` y sale del historial que ve el
+modelo, salvo la apertura con la lista del pedido, que nunca se reemplaza. Ráfagas: con varios mensajes seguidos del proveedor corre **un solo turno** del agente con
+todos ellos; los anteriores solo se guardan.
 
 ## Ejemplo de llamada (PowerShell)
 

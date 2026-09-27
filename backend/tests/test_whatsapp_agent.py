@@ -12,6 +12,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from app.core.exceptions import NotFoundError
+from app.core.mixins import utcnow
 from app.features.auth.model import User
 from app.features.quote.model import SupplierQuote
 from app.features.rfq.batch_service import create_batch_from_rows
@@ -123,8 +124,8 @@ def world(client, db_session):
               cemento=by_name["Cemento CPN40"], ladrillo=by_name["Ladrillo hueco portante 18x19x33"])
 
 
-def _greet(db, world):
-    """Abre la conversación y manda el primer mensaje del proveedor (el del link wa.me)."""
+def _greet(db, world, approve=True):
+    """Abre la conversación y manda el primer mensaje; con approve, la apertura queda enviada (L5b)."""
 
     conversation = open_conversation(db, world.batch.id, world.supplier.id)
     result = handle_inbound(
@@ -132,6 +133,10 @@ def _greet(db, world):
         f"Hola Bernardo, soy {world.supplier.name}. Mandame el pedido {world.batch.name}.",
         client=FakeClient(),
     )
+    if approve and result.outbound is not None:
+        result.outbound.sent_at = utcnow()
+        db.commit()
+
     return conversation, result
 
 
@@ -383,7 +388,7 @@ def test_inbound_on_closed_conversation_is_saved_but_agent_does_not_run(db_sessi
 
 
 def test_outbound_is_a_draft(db_session, world):
-    conversation, greeting = _greet(db_session, world)
+    conversation, greeting = _greet(db_session, world, approve=False)
     assert greeting.outbound.is_draft
 
     result = handle_inbound(db_session, conversation.id, "ok", client=FakeClient([reply(text("Dale."))]))

@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.mixins import utcnow
+from app.features.whatsapp import drafts
 from app.features.whatsapp import sender
 from app.features.whatsapp.model import WhatsappConversation
 from app.features.whatsapp.model import WhatsappMessage
@@ -49,18 +50,9 @@ def _aware(value: datetime | None) -> datetime | None:
 
 # ---------------------------------------------------------------- consultas
 def list_drafts(db: Session, conversation: WhatsappConversation) -> list[WhatsappMessage]:
-    return list(
-        db.scalars(
-            select(WhatsappMessage)
-            .where(
-                WhatsappMessage.conversation_id == conversation.id,
-                WhatsappMessage.direction == "outbound",
-                WhatsappMessage.approved_by.is_(None),
-                WhatsappMessage.sent_at.is_(None),
-            )
-            .order_by(WhatsappMessage.id.asc())
-        ).all()
-    )
+    """Solo pendientes: sin enviar, sin aprobar y sin descartar (L5b)."""
+
+    return drafts.pending_drafts(db, conversation)
 
 
 def last_inbound_at(db: Session, conversation: WhatsappConversation) -> datetime | None:
@@ -116,13 +108,20 @@ def approve(
 
         if message.sent_at is not None:
             raise ApprovalError("already_sent")
-    else:
-        drafts = list_drafts(db, conversation)
 
-        if not drafts:
+        if message.discarded_at is not None:
+            raise ApprovalError("draft_discarded")
+    else:
+        pending = list_drafts(db, conversation)
+
+        if not pending:
             raise ApprovalError("no_draft", status_code=404)
 
-        message = drafts[-1]
+        if len(pending) > 1:
+            # Sin message_id no se adivina: Diego elige cuál.
+            raise ApprovalError("ambiguous_draft")
+
+        message = pending[0]
 
     if not window_is_open(db, conversation, now=now):
         raise ApprovalError("window_closed")

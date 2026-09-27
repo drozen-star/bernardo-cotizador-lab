@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app import models  # noqa: F401 - registra todas las tablas en Base.metadata
 from app.core.database import Base
+from app.core.mixins import utcnow
 from app.core.security import hash_password
 from app.features.auth.model import User
 from app.features.quote.model import SupplierQuote
@@ -210,6 +211,17 @@ def mark_fin_turns(transcript_path: Path, fin_turns: list[int]) -> None:
     transcript_path.write_text("\n".join(output), encoding="utf-8")
 
 
+def _simulate_approval(db: Session, result) -> None:
+    """El runner ya asume aprobación humana sin cambios: el borrador queda como enviado (L5b).
+
+    Si no, el inbound siguiente lo marcaría ``superseded`` y desaparecería del historial.
+    """
+
+    if result.outbound is not None and result.outbound.sent_at is None:
+        result.outbound.sent_at = utcnow()
+        db.commit()
+
+
 def run_persona(
     db: Session,
     persona: Persona,
@@ -230,6 +242,7 @@ def run_persona(
     greeting = f"Hola Bernardo, soy {persona.name}, mandame el pedido {batch.name}"
     start = len(agent.records)
     result = handle_inbound(db, conversation.id, greeting, client=agent)
+    _simulate_approval(db, result)
     db.refresh(conversation)
     turns.append(_turn_record(result, conversation, greeting, agent, start))
 
@@ -245,6 +258,7 @@ def run_persona(
             history.append({"role": "assistant", "content": text})
             start = len(agent.records)
             result = handle_inbound(db, conversation.id, text, client=agent)
+            _simulate_approval(db, result)
             db.refresh(conversation)
             turns.append(_turn_record(result, conversation, text, agent, start))
 

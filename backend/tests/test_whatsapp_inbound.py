@@ -19,6 +19,7 @@ from app.features.whatsapp import inbound as inbound_flow
 from app.features.whatsapp.model import WhatsappConversation
 from app.features.whatsapp.model import WhatsappMessage
 from app.features.whatsapp.settings import whatsapp_settings
+from app.features.whatsapp.turn_gate import gate
 from tests.test_rfq_batch import OK_FILE
 from tests.test_rfq_batch import _create_supplier
 from tests.test_rfq_batch import _register
@@ -37,8 +38,10 @@ def payload(wa_id="wamid.1", frm=RAW_FROM, text=f"Hola Bernardo, soy Corralón N
 @pytest.fixture(autouse=True)
 def _clean_in_flight():
     inbound_flow._in_flight.clear()
+    gate.reset()
     yield
     inbound_flow._in_flight.clear()
+    gate.reset()
 
 
 @pytest.fixture

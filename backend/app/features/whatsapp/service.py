@@ -29,6 +29,7 @@ from app.features.quote.model import SupplierQuote
 from app.features.rfq.batch_model import RFQBatch
 from app.features.rfq.model import RFQ
 from app.features.supplier.model import Supplier
+from app.features.whatsapp import drafts
 from app.features.whatsapp import guardrails
 from app.features.whatsapp import prompt as prompts
 from app.features.whatsapp import tools
@@ -131,6 +132,10 @@ def text_history(messages: list[WhatsappMessage], *, tag: str) -> list[dict]:
     history: list[dict] = []
 
     for message in messages:
+        # L5b: un borrador descartado nunca le llegó al proveedor; no es historial.
+        if message.direction == "outbound" and message.discarded_at is not None:
+            continue
+
         role = "user" if message.direction == "inbound" else "assistant"
         text = f"<{tag}>\n{message.body}\n</{tag}>" if role == "user" else message.body
 
@@ -206,6 +211,10 @@ def handle_inbound(
     if not conversation.is_open:
         logger.info("Conversación %s en %s: inbound guardado, el agente no corre", conversation.id, conversation.status)
         return InboundResult(inbound=inbound, outbound=None)
+
+    # L5b: un inbound nuevo reemplaza los borradores pendientes. Sin commit: va con el
+    # turno, así un turno que falla deja vivo el borrador anterior.
+    drafts.supersede_pending(db, conversation)
 
     batch = conversation.batch
     supplier = conversation.supplier

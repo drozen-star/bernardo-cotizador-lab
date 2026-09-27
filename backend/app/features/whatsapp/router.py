@@ -18,9 +18,11 @@ from fastapi import BackgroundTasks
 from fastapi import Header
 from fastapi import HTTPException
 from pydantic import BaseModel
+from pydantic import Field
 
 from app.core.dependencies import DBSession
 from app.features.whatsapp import approval
+from app.features.whatsapp import drafts
 from app.features.whatsapp import inbound as inbound_flow
 from app.features.whatsapp.inbound import InboundPayload
 from app.features.whatsapp.model import WhatsappConversation
@@ -58,6 +60,14 @@ class ApproveRequest(BaseModel):
     message_id: int | None = None
 
 
+class DiscardRequest(BaseModel):
+    reason: str = Field(default=drafts.REASON_MANUAL, min_length=1, max_length=drafts.MAX_REASON_LENGTH)
+
+
+class EditRequest(BaseModel):
+    body: str = Field(min_length=1)
+
+
 class DraftOut(BaseModel):
     id: int
     conversation_id: int
@@ -67,6 +77,10 @@ class DraftOut(BaseModel):
     sent_at: datetime | None = None
     approved_by: int | None = None
     wa_message_id: str | None = None
+    original_body: str | None = None
+    edited_at: datetime | None = None
+    discarded_at: datetime | None = None
+    discard_reason: str | None = None
 
     @classmethod
     def from_message(cls, message: WhatsappMessage) -> "DraftOut":
@@ -79,6 +93,10 @@ class DraftOut(BaseModel):
             sent_at=message.sent_at,
             approved_by=message.approved_by,
             wa_message_id=message.wa_message_id,
+            original_body=message.original_body,
+            edited_at=message.edited_at,
+            discarded_at=message.discarded_at,
+            discard_reason=message.discard_reason,
         )
 
 
@@ -98,6 +116,21 @@ def _conversation_or_404(db, conversation_id: int) -> WhatsappConversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
 
     return conversation
+
+
+def _draft_or_404(db, conversation: WhatsappConversation, message_id: int) -> WhatsappMessage:
+    message = db.get(WhatsappMessage, message_id)
+
+    if message is None or message.conversation_id != conversation.id or message.direction != "outbound":
+        raise HTTPException(status_code=404, detail="draft_not_found")
+
+    return message
+
+
+def _raise_draft_error(exc: drafts.DraftError) -> None:
+    detail = {"code": exc.code, "flags": exc.flags} if exc.code == "guardrail" else exc.code
+
+    raise HTTPException(status_code=exc.status_code, detail=detail) from exc
 
 
 # ------------------------------------------------------------------- inbound
@@ -148,6 +181,55 @@ def list_drafts(
         window_open=approval.window_is_open(db, conversation),
         drafts=[DraftOut.from_message(message) for message in approval.list_drafts(db, conversation)],
     )
+
+
+# ------------------------------------------------------- discard / edit (L5b)
+@router.post(
+    "/conversations/{conversation_id}/drafts/{message_id}/discard",
+    response_model=DraftOut,
+    summary="Descartar un borrador (no se manda, no entra al historial)",
+)
+def discard_draft(
+    conversation_id: int,
+    message_id: int,
+    db: DBSession,
+    body: DiscardRequest | None = None,
+    x_bernardo_lab_admin: str | None = Header(default=None),
+):
+    require_admin(x_bernardo_lab_admin)
+    conversation = _conversation_or_404(db, conversation_id)
+    message = _draft_or_404(db, conversation, message_id)
+
+    try:
+        message = drafts.discard(db, message, body.reason if body else drafts.REASON_MANUAL)
+    except drafts.DraftError as exc:
+        _raise_draft_error(exc)
+
+    return DraftOut.from_message(message)
+
+
+@router.patch(
+    "/conversations/{conversation_id}/drafts/{message_id}",
+    response_model=DraftOut,
+    summary="Editar el texto de un borrador (pasa por los mismos frenos que el agente)",
+)
+def edit_draft(
+    conversation_id: int,
+    message_id: int,
+    body: EditRequest,
+    db: DBSession,
+    x_bernardo_lab_admin: str | None = Header(default=None),
+):
+    require_admin(x_bernardo_lab_admin)
+    conversation = _conversation_or_404(db, conversation_id)
+    message = _draft_or_404(db, conversation, message_id)
+
+    try:
+        message = drafts.edit(db, message, body.body)
+    except drafts.DraftError as exc:
+        _raise_draft_error(exc)
+
+    return DraftOut.from_message(message)
 
 
 # ------------------------------------------------------------------- approve

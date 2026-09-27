@@ -41,6 +41,7 @@ from app.features.whatsapp.phone import normalize_phone
 from app.features.whatsapp.service import handle_inbound
 from app.features.whatsapp.service import open_conversation
 from app.features.whatsapp.settings import whatsapp_settings
+from app.features.whatsapp.turn_gate import gate
 
 logger = logging.getLogger(__name__)
 
@@ -181,22 +182,27 @@ def resolve_batch(db: Session, supplier: Supplier, text: str | None) -> RFQBatch
 
 
 # ------------------------------------------------------------- persistencia
-def persist_without_agent(
-    db: Session, conversation: WhatsappConversation, payload: InboundPayload, flags: list[str]
+def persist_inbound_text(
+    db: Session,
+    conversation: WhatsappConversation,
+    body: str,
+    wa_message_id: str | None,
+    *,
+    media_type: str | None = None,
+    flags: list[str] | None = None,
 ) -> WhatsappMessage:
-    """Guarda el inbound sin correr el agente (hold, media, conversación cerrada)."""
+    """Guarda un inbound saneado sin correr el agente. Base de los demás persist_*."""
 
     settings = whatsapp_settings
-    body = payload.text if payload.is_text and payload.text else f"[{payload.type}]"
     sanitized = guardrails.sanitize_inbound(body, max_chars=settings.WHATSAPP_MAX_INPUT_CHARS, tag=settings.WHATSAPP_INPUT_TAG)
 
     message = WhatsappMessage(
         conversation_id=conversation.id,
         direction="inbound",
-        body=sanitized.clean or f"[{payload.type}]",
-        media_type=None if payload.is_text else payload.type[:64],
-        wa_message_id=payload.wa_message_id,
-        guardrail_flags=[*sanitized.flags, *flags],
+        body=sanitized.clean or (f"[{media_type}]" if media_type else ""),
+        media_type=media_type,
+        wa_message_id=wa_message_id,
+        guardrail_flags=[*sanitized.flags, *(flags or [])],
         received_at=utcnow(),
     )
 
@@ -205,6 +211,19 @@ def persist_without_agent(
     db.refresh(message)
 
     return message
+
+
+def persist_without_agent(
+    db: Session, conversation: WhatsappConversation, payload: InboundPayload, flags: list[str]
+) -> WhatsappMessage:
+    """Guarda el inbound sin correr el agente (hold, media, conversación cerrada)."""
+
+    body = payload.text if payload.is_text and payload.text else f"[{payload.type}]"
+
+    return persist_inbound_text(
+        db, conversation, body, payload.wa_message_id,
+        media_type=None if payload.is_text else payload.type[:64], flags=flags,
+    )
 
 
 def _touch_destination(db: Session, conversation: WhatsappConversation, raw_from: str) -> None:
@@ -252,22 +271,42 @@ def decide(db: Session, payload: InboundPayload) -> Decision:
         )
 
     _in_flight.add(payload.wa_message_id)
+    gate.enqueue(conversation.id)  # L5b: un turno a la vez; la ráfaga se funde en el último job
 
     return Decision(owned=True, reason=reason, conversation_id=conversation.id, supplier_id=supplier.id, action="agent")
 
 
 # -------------------------------------------------------------- background
 def run_agent_job(conversation_id: int, text: str, wa_message_id: str) -> None:
-    """Corre handle_inbound con sesión propia. Nunca re-lanza: loguea con el conversation_id."""
+    """Corre el turno con sesión propia y un solo turno a la vez por conversación.
 
+    Toma el turno (bloqueante). Si quedan jobs más nuevos encolados para la misma
+    conversación, este solo guarda su inbound: el último de la ráfaga corre el agente viendo
+    todos los mensajes. Nunca re-lanza: loguea con el conversation_id.
+    """
+
+    remaining = gate.acquire(conversation_id)
     db = SessionLocal()
 
     try:
-        handle_inbound(db, conversation_id, text or "", client=agent_client_factory(), wa_message_id=wa_message_id)
+        if remaining > 0:
+            conversation = db.get(WhatsappConversation, conversation_id)
+
+            if conversation is not None:
+                persist_inbound_text(db, conversation, text or "", wa_message_id)
+
+            logger.info(
+                "whatsapp.turn conversation_id=%s wa_message_id=%s coalesced (quedan %s más nuevos)",
+                conversation_id, wa_message_id, remaining,
+            )
+        else:
+            handle_inbound(db, conversation_id, text or "", client=agent_client_factory(), wa_message_id=wa_message_id)
+            logger.info("whatsapp.turn conversation_id=%s wa_message_id=%s ran", conversation_id, wa_message_id)
     except Exception:  # noqa: BLE001 - el bot ya recibió su 200; acá solo se registra
         logger.exception("whatsapp.inbound falló el agente en conversation_id=%s", conversation_id)
     finally:
         db.close()
+        gate.release(conversation_id)
         _in_flight.discard(wa_message_id)
 
 
